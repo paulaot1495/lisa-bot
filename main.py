@@ -5,7 +5,15 @@ from anthropic import Anthropic
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from agente_compra import agente_compra, manejar_callback_compra
-from agente_nutricion import agente_nutricion, es_mensaje_nutricion
+from agente_nutricion import (
+    agente_nutricion,
+    es_mensaje_nutricion,
+    es_mensaje_reset_nutricion,
+    agente_nutricion_reset,
+    manejar_callback_nutricion,
+    es_mensaje_consulta_nutricion,
+    agente_consulta_nutricion,
+)
 from subir_archivo import manejar_documento
 
 load_dotenv()

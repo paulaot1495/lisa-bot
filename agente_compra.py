@@ -168,7 +168,7 @@ def parsear_mensaje(mensaje: str) -> dict:
         max_tokens=1000,
         system="""Eres un parser inteligente de listas de la compra. Devuelve SOLO JSON válido sin backticks ni explicaciones.
 
-Acciones posibles: añadir | eliminar | ver_categoria | ver_tienda | ver_todo | ver_urgentes | limpiar_tienda
+Acciones posibles: añadir | eliminar | ver_categoria | ver_categorias (pido varias a la vez) | ver_tienda | ver_todo | ver_urgentes | limpiar_tienda
 
 Para "añadir" extrae cada producto con:
 - producto: nombre limpio y en minúsculas
@@ -207,6 +207,7 @@ Ejemplos de respuesta:
 {"accion": "eliminar", "productos": ["leche"]}
 {"accion": "limpiar_tienda", "tienda": "mercadona"}
 {"accion": "ver_todo"}
+{"accion": "ver_categorias", "categorias": ["alimentación", "higiene personal"]}
 {"accion": "ver_urgentes"}""",
         messages=[{"role": "user", "content": mensaje}]
     )
@@ -265,33 +266,42 @@ def formato_vista_completa(items: list[dict]) -> tuple[str, InlineKeyboardMarkup
     return "\n".join(lineas), InlineKeyboardMarkup(botones)
 
 
-def formato_vista_por_categorias(items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
-    if not items:
-        return "La lista está vacía.", None
+def formato_vista_multicategoria(categorias: list[str], items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
+    filtrados = [i for i in items if i["categoria"].lower() in [c.lower() for c in categorias]]
+    if not filtrados:
+        cats = ", ".join(categorias)
+        return f"No tienes nada en <b>{cats}</b>.", None
 
     from collections import defaultdict
-    por_categoria = defaultdict(list)
-    for item in items:
-        por_categoria[item["categoria"]].append(item)
+    por_categoria = defaultdict(lambda: defaultdict(list))
+    for item in filtrados:
+        por_categoria[item["categoria"]][item["tienda"]].append(item)
 
-    lineas = ["📂 <b>RESUMEN POR CATEGORÍAS</b>", ""]
-    botones_cat = []
+    nombres = " · ".join([f"{emoji_categoria(c)} {c}" for c in sorted(categorias)])
+    lineas = [
+        f"<b>{nombres.upper()}</b>",
+        f"<i>{len(filtrados)} productos</i>",
+        "",
+    ]
 
     for cat in sorted(por_categoria.keys()):
         emoji = emoji_categoria(cat)
-        productos = por_categoria[cat]
-        urgentes = sum(1 for p in productos if p["prioridad"] == "urgente")
-        badge = f"  🔴×{urgentes}" if urgentes else ""
-        lineas.append(f"{emoji} <b>{cat.upper()}</b>{badge}  —  {len(productos)} productos")
-        botones_cat.append(
-            InlineKeyboardButton(f"{emoji} {cat.capitalize()}", callback_data=f"categoria_{cat}")
-        )
+        lineas.append(f"{emoji} <b>{cat.upper()}</b>")
+        for tienda in sorted(por_categoria[cat].keys()):
+            lineas.append(f"  📍 <i>{tienda.capitalize()}</i>")
+            urgentes = [p for p in por_categoria[cat][tienda] if p["prioridad"] == "urgente"]
+            normales  = [p for p in por_categoria[cat][tienda] if p["prioridad"] != "urgente"]
+            for p in urgentes:
+                lineas.append(f"    🔴 <b>{p['producto']}</b>  ×{p['cantidad']}")
+            for p in normales:
+                lineas.append(f"    ⚪ {p['producto']}  ×{p['cantidad']}")
+        lineas.append("")
 
-    lineas.append("\n<i>Pulsa una categoría para ver su detalle</i>")
-    filas = [botones_cat[i:i+2] for i in range(0, len(botones_cat), 2)]
-    filas.append([InlineKeyboardButton("📋 Ver todo", callback_data="filtro_todo")])
-    return "\n".join(lineas), InlineKeyboardMarkup(filas)
-
+    botones = [
+        [InlineKeyboardButton("📂 Ver categorías", callback_data="filtro_categorias")],
+        [InlineKeyboardButton("📋 Ver todo",        callback_data="filtro_todo")],
+    ]
+    return "\n".join(lineas), InlineKeyboardMarkup(botones)
 
 def formato_vista_categoria(categoria: str, items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
     filtrados = [i for i in items if i["categoria"].lower() == categoria.lower()]
@@ -483,6 +493,10 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
         elif accion == "ver_categoria":
             return formato_vista_categoria(parsed.get("categoria", "otros"), items_actuales)
 
+        elif accion == "ver_categorias":
+            categorias = parsed.get("categorias", [])
+            return formato_vista_multicategoria(categorias, items_actuales)
+            
         else:
             return formato_vista_completa(items_actuales)
 
