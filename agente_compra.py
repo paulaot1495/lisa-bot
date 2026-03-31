@@ -47,6 +47,38 @@ def leer_items() -> list[dict]:
         return []
     wb = load_workbook(EXCEL_PATH, data_only=True)
     ws = wb.active
+    
+    # Obtener nombres de tiendas y palabras reservadas para ignorarlas
+    ignorar = {"total", "lista de la compra", "producto", "tienda", "cantidad", "prioridad"}
+    
+    items = []
+    for row in ws.iter_rows(min_row=4, values_only=True):
+        if not row[0]:
+            continue
+        producto = str(row[0]).strip()
+        # Ignorar filas que son cabeceras de sección o totales
+        if producto.lower() in ignorar:
+            continue
+        if producto.lower().startswith("total:"):
+            continue
+        # Ignorar filas donde la tienda está vacía Y el producto coincide con un nombre de tienda
+        # (son las filas de sección fusionadas que openpyxl lee como datos)
+        tienda = str(row[1]).strip() if row[1] else ""
+        if not tienda:
+            continue  # filas de sección no tienen tienda en columna B
+        
+        items.append({
+            "producto":  producto,
+            "tienda":    tienda,
+            "cantidad":  str(row[2]).strip() if row[2] else "1",
+            "prioridad": str(row[3]).strip() if row[3] else "normal",
+        })
+    return items
+    
+    if not os.path.exists(EXCEL_PATH):
+        return []
+    wb = load_workbook(EXCEL_PATH, data_only=True)
+    ws = wb.active
     items = []
     for row in ws.iter_rows(min_row=4, values_only=True):
         if row[0]:
