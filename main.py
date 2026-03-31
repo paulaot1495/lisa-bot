@@ -97,6 +97,11 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             texto, teclado = await agente_compra(mensaje)
             await update.message.reply_text(texto, parse_mode="HTML", reply_markup=teclado)
 
+        elif es_mensaje_reset_nutricion(mensaje):                         
+            texto, teclado = await agente_nutricion_reset(mensaje)
+            await update.message.reply_text(texto, parse_mode="HTML",     
+                                            reply_markup=teclado)         
+
         elif es_mensaje_nutricion(mensaje):                          
             await update.message.reply_text(                         
                 "🥗 <i>Analizando tu comida...</i>",                 
@@ -129,6 +134,12 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if query.data.startswith("nutricion_"):
+        texto, _ = await manejar_callback_nutricion(query.data)
+        await query.edit_message_text(text=texto, parse_mode="HTML")
+        return
+
     texto, teclado = await manejar_callback_compra(query.data)
     await query.edit_message_text(text=texto, parse_mode="HTML", reply_markup=teclado)
 
