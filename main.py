@@ -2,9 +2,9 @@ import os
 import logging
 from dotenv import load_dotenv
 from anthropic import Anthropic
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from agente_compra import agente_compra, manejar_callback_compra
+from agente_compra import agente_compra, manejar_callback_compra, agente_compra_con_confirmacion, ejecutar_borrado_confirmado, leer_items
 from agente_nutricion import (
     agente_nutricion,
     es_mensaje_nutricion,
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 claude = Anthropic(api_key=ANTHROPIC_KEY)
 conversaciones = {}
+pendiente_confirmacion = {}  # {user_id: {"accion": ..., "datos": ...}}
 
 SYSTEM_PROMPT_LISA = """Eres Lisa, una AI Manager personal.
 Hablas en español, eres directa, organizada y cálida.
@@ -44,16 +45,32 @@ FORMATO OBLIGATORIO — nunca uses asteriscos (*) ni guiones bajos (_):
 
 
 def es_mensaje_de_compra(mensaje: str) -> bool:
-    palabras_clave = [
-        "compra", "lista", "tienda", "mercadona", "lidl", "carrefour", "alcampo",
-        "corte inglés", "ikea", "amazon", "zara", "primark", "leche", "pan",
-        "añade", "añadir", "necesito", "falta", "faltan", "queda", "quedan",
-        "urgente", "compré", "ya compré", "borrar", "elimina", "tacha",
-        "qué me falta", "qué necesito", "muéstrame", "ver lista", "mi lista",
-        "pendiente", "productos",
-    ]
     mensaje_lower = mensaje.lower()
-    return any(p in mensaje_lower for p in palabras_clave)
+
+    tiendas = [
+        "mercadona", "lidl", "carrefour", "alcampo", "corte inglés",
+        "ikea", "amazon", "zara", "primark", "sklum", "leroy merlin",
+        "media markt", "decathlon", "sephora", "mango", "aldi", "primor"
+    ]
+    if any(t in mensaje_lower for t in tiendas):
+        return True
+
+    frases_accion = [
+        "añade ", "añadir ", "apunta ", "agrega ",
+        "ya compré", "ya he comprado", "he comprado",
+        "tacha ", "tachame ", "borra de la lista", "elimina de la lista",
+        "quita de la lista",
+        "mi lista", "ver lista", "muéstrame la lista", "enseñame la lista",
+        "qué me falta", "qué tengo pendiente", "qué necesito comprar",
+        "lista de la compra", "compra de ", "hice la compra",
+        "limpia la categoría", "limpia los ", "limpia las ",
+        "cambia el ", "cambia la ", "actualiza el ", "actualiza la ",
+        "ponlo en ", "ponla en ", "muévelo a ", "muévela a ",
+    ]
+    if any(f in mensaje_lower for f in frases_accion):
+        return True
+
+    return False
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,24 +119,42 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if es_mensaje_de_compra(mensaje):
             await update.message.reply_text("🛒 <i>Consultando tu lista...</i>", parse_mode="HTML")
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-            texto, teclado = await agente_compra(mensaje)
+
+            resultado = await agente_compra_con_confirmacion(mensaje)
+
+            if resultado["tipo"] == "confirmacion":
+                pendiente_confirmacion[user.id] = {
+                    "accion": resultado["accion"],
+                    "datos":  resultado["datos"],
+                }
+                botones = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Sí, borrar",  callback_data="confirmar_borrado"),
+                    InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_borrado"),
+                ]])
+                await update.message.reply_text(
+                    resultado["texto"], parse_mode="HTML", reply_markup=botones
+                )
+            else:
+                await update.message.reply_text(
+                    resultado["texto"], parse_mode="HTML", reply_markup=resultado["teclado"]
+                )
+
+        elif es_mensaje_reset_nutricion(mensaje):
+            texto, teclado = await agente_nutricion_reset(mensaje)
             await update.message.reply_text(texto, parse_mode="HTML", reply_markup=teclado)
 
-        elif es_mensaje_reset_nutricion(mensaje):                         
-            texto, teclado = await agente_nutricion_reset(mensaje)
-            await update.message.reply_text(texto, parse_mode="HTML",     
-                                            reply_markup=teclado)         
-
-        elif es_mensaje_nutricion(mensaje):                          
-            await update.message.reply_text(                         
-                "🥗 <i>Analizando tu comida...</i>",                 
-                parse_mode="HTML"                                    
-            )                                                        
-            await context.bot.send_chat_action(                      
-                chat_id=update.effective_chat.id, action="typing"    
-            )                                                        
-            texto = await agente_nutricion(mensaje)                  
+        elif es_mensaje_consulta_nutricion(mensaje):
+            await update.message.reply_text("📊 <i>Consultando tu registro...</i>", parse_mode="HTML")
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            texto = await agente_consulta_nutricion(mensaje)
             await update.message.reply_text(texto, parse_mode="HTML")
+
+        elif es_mensaje_nutricion(mensaje):
+            await update.message.reply_text("🥗 <i>Analizando tu comida...</i>", parse_mode="HTML")
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            texto, _ = await agente_nutricion(mensaje)
+            await update.message.reply_text(texto, parse_mode="HTML")
+
         else:
             conversaciones[user.id].append({"role": "user", "content": mensaje})
             resp = claude.messages.create(
@@ -142,12 +177,62 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user = query.from_user
 
+    # ── Confirmación de borrado ──────────────────────────
+    if query.data.startswith("limpiar_"):
+        tienda = query.data.replace("limpiar_", "")
+        items  = leer_items()
+        afectados = [i for i in items if i["tienda"].lower() == tienda]
+        if not afectados:
+            await query.edit_message_text(f"No hay productos de <b>{tienda.capitalize()}</b>.", parse_mode="HTML")
+            return
+        lineas = [
+            f"🗑 <b>¿Borrar toda la compra de {tienda.capitalize()}?</b>",
+            f"<i>{len(afectados)} productos se eliminarán:</i>", ""
+        ]
+        for p in afectados:
+            lineas.append(f"  ⚪ {p['producto']}  ×{p['cantidad']}")
+        pendiente_confirmacion[user.id] = {
+            "accion": "limpiar_tienda",
+            "datos":  {"tienda": tienda}
+        }
+        botones = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Sí, borrar",  callback_data="confirmar_borrado"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_borrado"),
+        ]])
+        await query.edit_message_text("\n".join(lineas), parse_mode="HTML", reply_markup=botones)
+        return
+
+    if query.data == "confirmar_borrado":
+        pendiente = pendiente_confirmacion.pop(user.id, None)
+        if not pendiente:
+            await query.edit_message_text(
+                "⚠️ La acción ya expiró. Vuelve a pedirlo.",
+                parse_mode="HTML"
+            )
+            return
+        texto, teclado = await ejecutar_borrado_confirmado(
+            pendiente["accion"], pendiente["datos"]
+        )
+        await query.edit_message_text(text=texto, parse_mode="HTML", reply_markup=teclado)
+        return
+
+    elif query.data == "cancelar_borrado":
+        pendiente_confirmacion.pop(user.id, None)
+        await query.edit_message_text(
+            "❌ <b>Cancelado.</b> La lista no se ha modificado.",
+            parse_mode="HTML"
+        )
+        return
+
+    # ── Callbacks de nutrición ───────────────────────────
     if query.data.startswith("nutricion_"):
         texto, _ = await manejar_callback_nutricion(query.data)
         await query.edit_message_text(text=texto, parse_mode="HTML")
         return
 
+    # ── Callbacks de compra (navegación) ─────────────────
     texto, teclado = await manejar_callback_compra(query.data)
     await query.edit_message_text(text=texto, parse_mode="HTML", reply_markup=teclado)
 

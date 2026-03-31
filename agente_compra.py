@@ -164,13 +164,12 @@ Acciones posibles:
 - eliminar: borrar uno o varios productos concretos ("ya compré la leche", "quita el pan")
 - limpiar_tienda: borrar todos los productos de una tienda ("ya hice la compra de Mercadona", "limpia Mercadona")
 - limpiar_categoria: borrar todos los productos de una categoría ("limpia los muebles", "ya compré todo lo de alimentación")
-- actualizar: cambiar datos de un producto existente (tienda, cantidad, prioridad) ("el sofá cámbialo a Sklum", "la leche ponla como urgente", "necesito 3 yogures en vez de 1")
+- actualizar: cambiar datos de un producto existente (tienda, cantidad, prioridad, categoria)
 - ver_categoria: ver productos de una categoría
 - ver_categorias: ver productos de varias categorías a la vez
 - ver_tienda: ver productos de una tienda
 - ver_todo: ver lista completa
 - ver_urgentes: ver solo urgentes
-- limpiar_tienda: borrar toda una tienda
 
 Categorías válidas (en minúsculas exactas):
 alimentación | higiene personal | limpieza hogar | farmacia y salud | tecnología | electrodomésticos | mobiliario | textil y ropa | papelería y oficina | otros
@@ -189,36 +188,16 @@ REGLAS DE CATEGORIZACIÓN:
 
 Casos dudosos: "rin" → limpieza hogar | "velas decorativas" → otros | "velas relax" → higiene personal | "tuppers" → otros | "colchón" → mobiliario
 
-Formatos de respuesta según acción:
-
-Añadir:
+Formatos de respuesta:
 {"accion": "añadir", "items": [{"producto": "leche", "tienda": "mercadona", "cantidad": "2", "prioridad": "normal", "categoria": "alimentación"}]}
-
-Eliminar productos concretos:
 {"accion": "eliminar", "productos": ["leche", "pan"]}
-
-Limpiar tienda entera:
 {"accion": "limpiar_tienda", "tienda": "mercadona"}
-
-Limpiar categoría entera:
 {"accion": "limpiar_categoria", "categoria": "mobiliario"}
-
-Actualizar un producto (solo incluye los campos que cambian):
-{"accion": "actualizar", "producto": "sofá", "cambios": {"tienda": "sklum", "cantidad": "1", "prioridad": "urgente"}}
-
-Ver categoría:
+{"accion": "actualizar", "producto": "sofá", "cambios": {"tienda": "sklum"}}
 {"accion": "ver_categoria", "categoria": "alimentación"}
-
-Ver varias categorías:
 {"accion": "ver_categorias", "categorias": ["alimentación", "higiene personal"]}
-
-Ver tienda:
 {"accion": "ver_tienda", "tienda": "mercadona"}
-
-Ver todo:
 {"accion": "ver_todo"}
-
-Ver urgentes:
 {"accion": "ver_urgentes"}""",
         messages=[{"role": "user", "content": mensaje}]
     )
@@ -323,7 +302,7 @@ def formato_vista_categoria(categoria: str, items: list[dict]) -> tuple[str, Inl
 def formato_vista_multicategoria(categorias: list[str], items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
     filtrados = [i for i in items if i["categoria"].lower() in [c.lower() for c in categorias]]
     if not filtrados:
-        return f"No tienes nada en esas categorías.", None
+        return "No tienes nada en esas categorías.", None
 
     por_categoria = defaultdict(lambda: defaultdict(list))
     for item in filtrados:
@@ -427,7 +406,6 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
         accion         = parsed.get("accion", "ver_todo")
         items_actuales = leer_items()
 
-        # ── AÑADIR ──────────────────────────────────────────
         if accion == "añadir":
             nuevos = parsed.get("items", [])
             if not nuevos:
@@ -453,70 +431,21 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
             botones = [[InlineKeyboardButton("📋 Ver lista completa", callback_data="filtro_todo")]]
             return "\n".join(lineas), InlineKeyboardMarkup(botones)
 
-        # ── ELIMINAR PRODUCTOS CONCRETOS ────────────────────
-        elif accion == "eliminar":
-            productos_borrar = [p.lower() for p in parsed.get("productos", [])]
-            antes = len(items_actuales)
-            items_actuales = [i for i in items_actuales if i["producto"].lower() not in productos_borrar]
-            borrados = antes - len(items_actuales)
-            guardar_excel(items_actuales)
-            if borrados == 0:
-                return "No encontré esos productos en la lista.", None
-            nombres = ", ".join(parsed.get("productos", []))
-            botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
-            return f"🗑 <b>Eliminado:</b> <i>{nombres}</i>", InlineKeyboardMarkup(botones)
-
-        # ── LIMPIAR TIENDA ENTERA ───────────────────────────
-        elif accion == "limpiar_tienda":
-            tienda = parsed.get("tienda", "").lower()
-            antes = len(items_actuales)
-            items_actuales = [i for i in items_actuales if i["tienda"].lower() != tienda]
-            borrados = antes - len(items_actuales)
-            guardar_excel(items_actuales)
-            botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
-            return (
-                f"✅ <b>Compra de {tienda.capitalize()} completada.</b>\n"
-                f"<i>{borrados} productos eliminados.</i>",
-                InlineKeyboardMarkup(botones)
-            )
-
-        # ── LIMPIAR CATEGORÍA ENTERA ────────────────────────
-        elif accion == "limpiar_categoria":
-            categoria = parsed.get("categoria", "").lower()
-            antes = len(items_actuales)
-            items_actuales = [i for i in items_actuales if i["categoria"].lower() != categoria]
-            borrados = antes - len(items_actuales)
-            guardar_excel(items_actuales)
-            emoji = emoji_categoria(categoria)
-            botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
-            return (
-                f"✅ {emoji} <b>{categoria.capitalize()} limpiado.</b>\n"
-                f"<i>{borrados} productos eliminados.</i>",
-                InlineKeyboardMarkup(botones)
-            )
-
-        # ── ACTUALIZAR PRODUCTO ─────────────────────────────
         elif accion == "actualizar":
             nombre_buscar = parsed.get("producto", "").lower()
             cambios       = parsed.get("cambios", {})
-
-            # Buscar el producto (búsqueda flexible)
             encontrado = None
             for item in items_actuales:
                 if nombre_buscar in item["producto"].lower() or item["producto"].lower() in nombre_buscar:
                     encontrado = item
                     break
-
             if not encontrado:
                 return (
                     f"No encontré <b>{parsed.get('producto','')}</b> en la lista.\n"
-                    f"<i>¿Quizás está con otro nombre?</i>",
-                    None
+                    f"<i>¿Quizás está con otro nombre?</i>", None
                 )
-
-            nombre_original = encontrado["producto"]
+            nombre_original   = encontrado["producto"]
             cambios_aplicados = []
-
             if "tienda" in cambios:
                 encontrado["tienda"] = cambios["tienda"].lower()
                 cambios_aplicados.append(f"tienda → <i>{cambios['tienda']}</i>")
@@ -530,28 +459,19 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
             if "categoria" in cambios:
                 encontrado["categoria"] = cambios["categoria"].lower()
                 cambios_aplicados.append(f"categoría → <i>{cambios['categoria']}</i>")
-
             guardar_excel(items_actuales)
             resumen = "\n  ".join(cambios_aplicados)
             botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
-            return (
-                f"✏️ <b>{nombre_original}</b> actualizado:\n  {resumen}",
-                InlineKeyboardMarkup(botones)
-            )
+            return f"✏️ <b>{nombre_original}</b> actualizado:\n  {resumen}", InlineKeyboardMarkup(botones)
 
-        # ── VISTAS ──────────────────────────────────────────
         elif accion == "ver_urgentes":
             return formato_vista_urgentes(items_actuales)
-
         elif accion == "ver_tienda":
             return formato_vista_tienda(parsed.get("tienda", ""), items_actuales)
-
         elif accion == "ver_categoria":
             return formato_vista_categoria(parsed.get("categoria", "otros"), items_actuales)
-
         elif accion == "ver_categorias":
             return formato_vista_multicategoria(parsed.get("categorias", []), items_actuales)
-
         else:
             return formato_vista_completa(items_actuales)
 
@@ -563,7 +483,131 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
 
 
 # ─────────────────────────────────────────
-# MANEJADOR DE BOTONES INLINE
+# CONFIRMACIÓN DE BORRADO
+# Las acciones de borrado pasan por aquí
+# antes de ejecutarse — piden confirmación
+# ─────────────────────────────────────────
+ACCIONES_QUE_BORRAN = {"eliminar", "limpiar_tienda", "limpiar_categoria"}
+
+
+async def agente_compra_con_confirmacion(mensaje: str) -> dict:
+    """
+    Como agente_compra pero las acciones de borrado devuelven
+    un dict de confirmación en vez de ejecutarse directamente.
+    """
+    try:
+        parsed = parsear_mensaje(mensaje)
+        accion = parsed.get("accion", "ver_todo")
+
+        if accion in ACCIONES_QUE_BORRAN:
+            items_actuales = leer_items()
+            texto_preview  = _preview_borrado(accion, parsed, items_actuales)
+            # Si no hay nada que borrar ejecutar directamente sin preguntar
+            if texto_preview.startswith("No encontré") or texto_preview.startswith("No hay"):
+                return {"tipo": "normal", "texto": texto_preview, "teclado": None}
+            return {
+                "tipo":   "confirmacion",
+                "accion": accion,
+                "datos":  parsed,
+                "texto":  texto_preview,
+            }
+
+        texto, teclado = await agente_compra(mensaje)
+        return {"tipo": "normal", "texto": texto, "teclado": teclado}
+
+    except Exception as e:
+        logger.error(f"Error en agente_compra_con_confirmacion: {e}")
+        return {"tipo": "normal", "texto": "Hubo un error. Inténtalo de nuevo.", "teclado": None}
+
+
+def _preview_borrado(accion: str, parsed: dict, items: list[dict]) -> str:
+    """Genera el mensaje de confirmación mostrando exactamente qué se va a borrar."""
+    if accion == "eliminar":
+        productos = parsed.get("productos", [])
+        encontrados = [i for i in items if i["producto"].lower() in [p.lower() for p in productos]]
+        if not encontrados:
+            return f"No encontré <b>{', '.join(productos)}</b> en la lista."
+        lineas = ["🗑 <b>¿Eliminar estos productos?</b>", ""]
+        for p in encontrados:
+            lineas.append(f"  ⚪ <b>{p['producto']}</b>  <i>({p['tienda']} · {p['categoria']})</i>")
+        return "\n".join(lineas)
+
+    elif accion == "limpiar_tienda":
+        tienda    = parsed.get("tienda", "").lower()
+        afectados = [i for i in items if i["tienda"].lower() == tienda]
+        if not afectados:
+            return f"No hay productos de <b>{tienda.capitalize()}</b> en la lista."
+        lineas = [
+            f"🗑 <b>¿Borrar toda la compra de {tienda.capitalize()}?</b>",
+            f"<i>{len(afectados)} productos se eliminarán:</i>",
+            ""
+        ]
+        for p in afectados:
+            lineas.append(f"  ⚪ {p['producto']}  ×{p['cantidad']}")
+        return "\n".join(lineas)
+
+    elif accion == "limpiar_categoria":
+        categoria = parsed.get("categoria", "").lower()
+        afectados = [i for i in items if i["categoria"].lower() == categoria]
+        if not afectados:
+            return f"No hay productos en <b>{categoria}</b>."
+        emoji = emoji_categoria(categoria)
+        lineas = [
+            f"🗑 <b>¿Borrar toda la categoría {emoji} {categoria}?</b>",
+            f"<i>{len(afectados)} productos se eliminarán:</i>",
+            ""
+        ]
+        for p in afectados:
+            lineas.append(f"  ⚪ {p['producto']}  <i>({p['tienda']})</i>")
+        return "\n".join(lineas)
+
+    return "¿Confirmas el borrado?"
+
+
+async def ejecutar_borrado_confirmado(accion: str, parsed: dict) -> tuple[str, InlineKeyboardMarkup | None]:
+    """Ejecuta el borrado real una vez que el usuario ha confirmado."""
+    items_actuales = leer_items()
+    botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
+
+    if accion == "eliminar":
+        productos_borrar = [p.lower() for p in parsed.get("productos", [])]
+        antes = len(items_actuales)
+        items_actuales = [i for i in items_actuales if i["producto"].lower() not in productos_borrar]
+        borrados = antes - len(items_actuales)
+        guardar_excel(items_actuales)
+        nombres = ", ".join(parsed.get("productos", []))
+        return f"✅ <b>Eliminado:</b> <i>{nombres}</i>", InlineKeyboardMarkup(botones)
+
+    elif accion == "limpiar_tienda":
+        tienda = parsed.get("tienda", "").lower()
+        antes  = len(items_actuales)
+        items_actuales = [i for i in items_actuales if i["tienda"].lower() != tienda]
+        borrados = antes - len(items_actuales)
+        guardar_excel(items_actuales)
+        return (
+            f"✅ <b>Compra de {tienda.capitalize()} completada.</b>\n"
+            f"<i>{borrados} productos eliminados.</i>",
+            InlineKeyboardMarkup(botones)
+        )
+
+    elif accion == "limpiar_categoria":
+        categoria = parsed.get("categoria", "").lower()
+        antes     = len(items_actuales)
+        items_actuales = [i for i in items_actuales if i["categoria"].lower() != categoria]
+        borrados  = antes - len(items_actuales)
+        guardar_excel(items_actuales)
+        return (
+            f"✅ {emoji_categoria(categoria)} <b>{categoria.capitalize()} limpiado.</b>\n"
+            f"<i>{borrados} productos eliminados.</i>",
+            InlineKeyboardMarkup(botones)
+        )
+
+    return "Acción no reconocida.", None
+
+
+# ─────────────────────────────────────────
+# MANEJADOR DE BOTONES INLINE (navegación)
+# El borrado lo gestiona main.py directamente
 # ─────────────────────────────────────────
 async def manejar_callback_compra(data: str) -> tuple[str, InlineKeyboardMarkup | None]:
     items_actuales = leer_items()
@@ -581,16 +625,21 @@ async def manejar_callback_compra(data: str) -> tuple[str, InlineKeyboardMarkup 
     elif data.startswith("categoria_"):
         return formato_vista_categoria(data.replace("categoria_", ""), items_actuales)
     elif data.startswith("limpiar_"):
-        tienda = data.replace("limpiar_", "")
-        antes = len(items_actuales)
-        items_nuevos = [i for i in items_actuales if i["tienda"].lower() != tienda]
-        borrados = antes - len(items_nuevos)
-        guardar_excel(items_nuevos)
-        botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
-        return (
-            f"✅ <b>Compra de {tienda.capitalize()} completada.</b>\n"
-            f"<i>{borrados} productos eliminados.</i>",
-            InlineKeyboardMarkup(botones)
-        )
+        # El botón "Compra hecha" de la vista tienda también pide confirmación
+        # — devuelve el preview para que main.py lo gestione igual
+        tienda    = data.replace("limpiar_", "")
+        afectados = [i for i in items_actuales if i["tienda"].lower() == tienda]
+        if not afectados:
+            return f"No hay productos de <b>{tienda.capitalize()}</b>.", None
+        lineas = [
+            f"🗑 <b>¿Borrar toda la compra de {tienda.capitalize()}?</b>",
+            f"<i>{len(afectados)} productos se eliminarán:</i>",
+            ""
+        ]
+        for p in afectados:
+            lineas.append(f"  ⚪ {p['producto']}  ×{p['cantidad']}")
+        # Nota: este caso especial lo maneja main.py con los botones de confirmar/cancelar
+        # Aquí solo devolvemos el texto — main.py detecta "limpiar_" y añade los botones
+        return "\n".join(lineas), None
 
     return "Acción no reconocida.", None
