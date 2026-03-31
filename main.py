@@ -5,6 +5,8 @@ from anthropic import Anthropic
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from agente_compra import agente_compra, manejar_callback_compra
+from agente_nutricion import agente_nutricion, es_mensaje_nutricion
+from upload_file import add_file
 
 load_dotenv()
 
@@ -95,6 +97,16 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             texto, teclado = await agente_compra(mensaje)
             await update.message.reply_text(texto, parse_mode="HTML", reply_markup=teclado)
 
+        elif es_mensaje_nutricion(mensaje):                          
+            await update.message.reply_text(                         
+                "🥗 <i>Analizando tu comida...</i>",                 
+                parse_mode="HTML"                                    
+            )                                                        
+            await context.bot.send_chat_action(                      
+                chat_id=update.effective_chat.id, action="typing"    
+            )                                                        
+            texto = await agente_nutricion(mensaje)                  
+            await update.message.reply_text(texto, parse_mode="HTML")
         else:
             conversaciones[user.id].append({"role": "user", "content": mensaje})
             resp = claude.messages.create(
@@ -127,6 +139,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("ayuda", ayuda))
+    app.add_handler(MessageHandler(filters.Document.ALL, add_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
     app.add_handler(CallbackQueryHandler(manejar_callback))
 
