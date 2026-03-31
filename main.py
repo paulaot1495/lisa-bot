@@ -139,7 +139,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("ayuda", ayuda))
-app.add_handler(MessageHandler(filters.Document.ALL, manejar_documento))
+    app.add_handler(MessageHandler(filters.Document.ALL, manejar_documento))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
     app.add_handler(CallbackQueryHandler(manejar_callback))
 
