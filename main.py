@@ -79,29 +79,55 @@ _TIENDAS = {
     "el corte inglés",
 }
 
+# Frases que indican claramente intención de lista de la compra
 _FRASES_ACCION = (
+    # Añadir
     "añade ", "añadir ", "apunta ", "agrega ", "agregar ",
+    "necesito comprar", "tengo que comprar", "me falta ", "me faltan ",
+    "también necesito", "también quiero", "y también ",
+    "pon en la lista", "apúntame", "apúntalo", "apúntala",
+    # Ver / consultar
+    "mi lista", "ver lista", "muéstrame la lista", "enseñame la lista",
+    "muéstrame todo", "ver todo", "ver la lista", "consultar lista",
+    "qué tengo", "qué me falta", "qué tengo pendiente", "qué necesito comprar",
+    "qué hay en", "lista de la compra", "lista completa",
+    "qué necesito", "que necesito",
+    # Borrar / completar
     "ya compré", "ya he comprado", "he comprado",
     "tacha ", "tachame ", "táchame ",
     "borra de la lista", "elimina de la lista", "quita de la lista",
-    "elimina ", "quita ",
-    "mi lista", "ver lista", "muéstrame la lista", "enseñame la lista",
-    "qué me falta", "qué tengo pendiente", "qué necesito comprar",
-    "lista de la compra", "compra de ", "hice la compra", "he hecho la compra",
+    "elimina ", "quita ", "borra ",
+    "hice la compra", "he hecho la compra",
+    # Limpiar
     "limpia la categoría", "limpia los ", "limpia las ", "limpia ",
+    # Actualizar
     "cambia el ", "cambia la ", "actualiza el ", "actualiza la ",
     "ponlo en ", "ponla en ", "muévelo a ", "muévela a ",
+    # Urgentes
     "urgente", "urgentes",
+    # Filtros / vistas
     "ver categoría", "ver tienda", "filtrar por",
+    "compra de ", "compra en ",
 )
 
 
 def es_mensaje_de_compra(mensaje: str) -> bool:
-    ml = mensaje.lower()
+    ml = mensaje.lower().strip()
+
+    # Coincidencia con tienda conocida → siempre es de compra
     if any(t in ml for t in _TIENDAS):
         return True
-    if any(ml.startswith(f) or f" {f}" in ml for f in _FRASES_ACCION):
+
+    # Coincidencia con frase de acción (al inicio o precedida de espacio)
+    if any(ml.startswith(f) or (f" {f}" in ml) for f in _FRASES_ACCION):
         return True
+
+    # Patrones conversacionales de "necesito X" (sin tienda explícita)
+    # Solo si el mensaje es corto y directo (evita falsos positivos en conversación)
+    _NECESITO = ("necesito ", "quiero comprar ", "hay que comprar ")
+    if any(ml.startswith(p) for p in _NECESITO) and len(ml) < 200:
+        return True
+
     return False
 
 

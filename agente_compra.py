@@ -130,11 +130,14 @@ def leer_items() -> list[dict]:
                any(producto.startswith(e) for e in CATEGORIAS.values()):
                 continue
 
-            tienda = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+            tienda_raw = str(row[1]).strip() if len(row) > 1 and row[1] else ""
 
-            # Si no hay tienda, la fila no es un artículo real
-            if not tienda or tienda.lower() in _FILAS_IGNORAR:
+            # Si el campo tienda es una cabecera de sección, ignorar la fila
+            if tienda_raw.lower() in _FILAS_IGNORAR:
                 continue
+
+            # Si no tiene tienda asignada, guardar como "sin tienda"
+            tienda = tienda_raw if tienda_raw else "sin tienda"
 
             cantidad  = str(row[2]).strip() if len(row) > 2 and row[2] else "1"
             prioridad = str(row[3]).strip().lower() if len(row) > 3 and row[3] else "normal"
@@ -265,17 +268,17 @@ _SYSTEM_PARSER = """Eres un parser de listas de la compra. Devuelve ÚNICAMENTE 
 sin backticks, sin texto previo ni posterior, sin comentarios.
 
 ─── ACCIONES ───────────────────────────────────────────────────────────────
-añadir          → añadir uno o varios productos
-eliminar        → borrar productos concretos ya comprados
-limpiar_tienda  → borrar TODOS los productos de una tienda
+añadir            → añadir uno o varios productos
+eliminar          → borrar productos concretos ya comprados
+limpiar_tienda    → borrar TODOS los productos de una tienda
 limpiar_categoria → borrar TODOS los productos de una categoría
-actualizar      → cambiar tienda/cantidad/prioridad/categoría de un producto
-ver_todo        → ver la lista completa
-ver_urgentes    → ver sólo los urgentes
-ver_categoria   → ver una categoría concreta
-ver_categorias  → ver varias categorías a la vez
-ver_tienda      → ver una tienda concreta
-ver_filtro      → filtrar combinando tiendas y/o categorías a la vez
+actualizar        → cambiar tienda/cantidad/prioridad/categoría de un producto
+ver_todo          → ver la lista completa
+ver_urgentes      → ver sólo los urgentes
+ver_categoria     → ver una categoría concreta
+ver_categorias    → ver varias categorías a la vez
+ver_tienda        → ver una tienda concreta
+ver_filtro        → filtrar combinando tiendas y/o categorías a la vez
 
 ─── CATEGORÍAS VÁLIDAS (exactas, en minúsculas) ────────────────────────────
 alimentación | higiene personal | limpieza hogar | farmacia y salud |
@@ -283,8 +286,8 @@ tecnología | electrodomésticos | mobiliario | textil y ropa |
 papelería y oficina | otros
 
 ─── REGLAS DE CATEGORIZACIÓN ───────────────────────────────────────────────
-alimentación      → comida, bebida, ingredientes, snacks, especias
-higiene personal  → cuidado corporal, cosmética, dental, champú, maquillaje, perfume
+alimentación      → comida, bebida, ingredientes, snacks, especias, chocolate
+higiene personal  → cuidado corporal, cosmética, dental, champú, maquillaje, perfume, bastoncillos, mascarilla facial
 limpieza hogar    → detergentes, bayetas, fregonas, lavavajillas, ambientadores, esponjas, rin
 farmacia y salud  → medicamentos, vitaminas, tiritas, termómetros, suplementos
 tecnología        → electrónica, cables, pilas, bombillas inteligentes
@@ -294,8 +297,19 @@ textil y ropa     → ropa, calzado, ropa de cama, toallas, cortinas, cojines
 papelería y oficina → papel, bolígrafos, carpetas, post-its, tijeras
 otros             → lo que no encaje claramente (tuppers, velas decorativas…)
 
+─── REGLA CRÍTICA: CAMPO TIENDA ───────────────────────────────────────────
+El campo "tienda" es SIEMPRE obligatorio en cada item.
+- Si el usuario menciona una tienda → úsala (en minúsculas)
+- Si el usuario NO menciona tienda → usa exactamente la cadena "sin tienda"
+- NUNCA dejes el campo "tienda" vacío o ausente
+
 ─── FORMATOS DE RESPUESTA ──────────────────────────────────────────────────
+Añadir con tienda:
 {"accion":"añadir","items":[{"producto":"leche","tienda":"mercadona","cantidad":"2","prioridad":"normal","categoria":"alimentación"}]}
+
+Añadir sin tienda especificada:
+{"accion":"añadir","items":[{"producto":"papel higiénico","tienda":"sin tienda","cantidad":"4","prioridad":"normal","categoria":"limpieza hogar"}]}
+
 {"accion":"eliminar","productos":["leche","pan"]}
 {"accion":"limpiar_tienda","tienda":"mercadona"}
 {"accion":"limpiar_categoria","categoria":"mobiliario"}
