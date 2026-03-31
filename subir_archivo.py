@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 BASE_NUTRICIONAL_PATH = Path(os.getenv("BASE_NUTRICIONAL_PATH", "/data/base_nutricional.xlsx"))
 
 
-async def upload_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def manejar_documento(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Guarda cualquier .xlsx recibido como base_nutricional si el nombre lo indica,
     o pregunta al usuario qué quiere hacer con él."""
     doc = update.message.document

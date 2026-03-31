@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from agente_compra import agente_compra, manejar_callback_compra
 from agente_nutricion import agente_nutricion, es_mensaje_nutricion
-from upload_file import add_file
+from subir_archivo import manejar_documento
 
 load_dotenv()
 
@@ -139,7 +139,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("ayuda", ayuda))
-    app.add_handler(MessageHandler(filters.Document.ALL, add_file))
+app.add_handler(MessageHandler(filters.Document.ALL, manejar_documento))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
     app.add_handler(CallbackQueryHandler(manejar_callback))
 
