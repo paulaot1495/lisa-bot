@@ -34,3 +34,5 @@ async def agente_resumen(peticion: str) -> str:
         messages=[{"role": "user", "content": peticion}]
     )
     return respuesta.content[0].text
+
+from agente_compra import agente_compra

@@ -29,6 +29,7 @@ Tienes a tu disposición estos agentes especializados:
 
 - REDACTOR: para escribir emails, posts, mensajes, textos de cualquier tipo
 - RESUMEN: para resumir textos, artículos, documentos largos
+- COMPRA: para añadir productos a la lista, ver qué comprar por tienda, eliminar lo ya comprado
 - LISA: para todo lo demás (preguntas generales, planificación, decisiones)
 
 Tu trabajo es:
@@ -111,6 +112,11 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📋 *Pasando al agente Resumen...*", parse_mode="Markdown")
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
             respuesta_texto = await agente_resumen(mensaje)
+
+        elif "COMPRA" in decision:
+            await update.message.reply_text("🛒 *Consultando tu lista...*", parse_mode="Markdown")
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            respuesta_texto = await agente_compra(mensaje)
 
         else:
             # Lisa responde ella misma
