@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from collections import defaultdict
 from dotenv import load_dotenv
 from anthropic import Anthropic
 from openpyxl import Workbook, load_workbook
@@ -18,16 +19,16 @@ claude = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 # CATEGORÍAS Y SUS EMOJIS
 # ─────────────────────────────────────────
 CATEGORIAS = {
-    "alimentación":       "🥦",
-    "higiene personal":   "🧴",
-    "limpieza hogar":     "🧹",
-    "farmacia y salud":   "💊",
-    "tecnología":         "💻",
-    "electrodomésticos":  "🔌",
-    "mobiliario":         "🛋",
-    "textil y ropa":      "👕",
-    "papelería y oficina":"📎",
-    "otros":              "📦",
+    "alimentación":        "🥦",
+    "higiene personal":    "🧴",
+    "limpieza hogar":      "🧹",
+    "farmacia y salud":    "💊",
+    "tecnología":          "💻",
+    "electrodomésticos":   "🔌",
+    "mobiliario":          "🛋",
+    "textil y ropa":       "👕",
+    "papelería y oficina": "📎",
+    "otros":               "📦",
 }
 
 def emoji_categoria(cat: str) -> str:
@@ -77,13 +78,13 @@ def leer_items() -> list[dict]:
             continue
         tienda = str(row[1]).strip() if row[1] else ""
         if not tienda:
-            continue  # filas de sección fusionada — sin tienda en col B
+            continue
         items.append({
-            "producto":   producto,
-            "tienda":     tienda,
-            "cantidad":   str(row[2]).strip() if row[2] else "1",
-            "prioridad":  str(row[3]).strip() if row[3] else "normal",
-            "categoria":  str(row[4]).strip().lower() if row[4] else "otros",
+            "producto":  producto,
+            "tienda":    tienda,
+            "cantidad":  str(row[2]).strip() if row[2] else "1",
+            "prioridad": str(row[3]).strip() if row[3] else "normal",
+            "categoria": str(row[4]).strip().lower() if row[4] else "otros",
         })
     return items
 
@@ -94,73 +95,63 @@ def guardar_excel(items: list[dict]):
     ws = wb.active
     ws.title = "Lista Compra"
 
-    ws.column_dimensions['A'].width = 28  # Producto
-    ws.column_dimensions['B'].width = 20  # Tienda
-    ws.column_dimensions['C'].width = 10  # Cantidad
-    ws.column_dimensions['D'].width = 12  # Prioridad
-    ws.column_dimensions['E'].width = 20  # Categoría
+    ws.column_dimensions['A'].width = 28
+    ws.column_dimensions['B'].width = 20
+    ws.column_dimensions['C'].width = 10
+    ws.column_dimensions['D'].width = 12
+    ws.column_dimensions['E'].width = 20
 
-    # Título
     ws.merge_cells("A1:E1")
     ws["A1"] = "Lista de la Compra"
     apply(ws["A1"], bold=True, fg=C_HEADER_FG, bg=C_HEADER_BG, size=13)
     ws.row_dimensions[1].height = 28
     ws.row_dimensions[2].height = 6
 
-    # Cabeceras
     for col, nombre in enumerate(["Producto", "Tienda", "Cantidad", "Prioridad", "Categoría"], start=1):
         cell = ws.cell(row=3, column=col, value=nombre.upper())
         apply(cell, bold=True, fg=C_HEADER_FG, bg=C_HEADER_BG, size=11)
     ws.row_dimensions[3].height = 20
 
-    # Agrupar por categoría → tienda
-    from collections import defaultdict
     por_categoria = defaultdict(lambda: defaultdict(list))
     for item in items:
         por_categoria[item["categoria"]][item["tienda"]].append(item)
 
     row_num = 4
     for categoria in sorted(por_categoria.keys()):
-        # Fila de sección: categoría
         ws.merge_cells(f"A{row_num}:E{row_num}")
-        emoji = emoji_categoria(categoria)
-        ws[f"A{row_num}"] = f"{emoji}  {categoria.upper()}"
+        ws[f"A{row_num}"] = f"{emoji_categoria(categoria)}  {categoria.upper()}"
         apply(ws[f"A{row_num}"], bold=True, fg=C_HEADER_FG, bg=C_HEADER_BG, align="left", size=11)
         ws.row_dimensions[row_num].height = 20
         row_num += 1
 
         for tienda in sorted(por_categoria[categoria].keys()):
-            # Subsección: tienda
             ws.merge_cells(f"A{row_num}:E{row_num}")
             ws[f"A{row_num}"] = f"    📍 {tienda.upper()}"
             apply(ws[f"A{row_num}"], bold=True, fg=C_SECTION_FG, bg=C_SECTION_BG, align="left", size=10)
             ws.row_dimensions[row_num].height = 18
             row_num += 1
 
-            productos = por_categoria[categoria][tienda]
-            for i, item in enumerate(productos):
+            for i, item in enumerate(por_categoria[categoria][tienda]):
                 bg = C_ROW1_BG if i % 2 == 0 else C_ROW2_BG
-                valores = [item["producto"], item["tienda"], item["cantidad"],
-                           item["prioridad"], item["categoria"]]
-                for col, val in enumerate(valores, start=1):
+                for col, val in enumerate(
+                    [item["producto"], item["tienda"], item["cantidad"], item["prioridad"], item["categoria"]],
+                    start=1
+                ):
                     cell = ws.cell(row=row_num, column=col, value=val)
                     apply(cell, fg="000000", bg=bg, align="left" if col == 1 else "center")
                 ws.row_dimensions[row_num].height = 16
                 row_num += 1
 
-    # Total
     ws.merge_cells(f"A{row_num}:D{row_num}")
     ws[f"A{row_num}"] = f"TOTAL: {len(items)} productos"
     apply(ws[f"A{row_num}"], bold=True, fg=C_TOTAL_FG, bg=C_TOTAL_BG, size=11)
     apply(ws.cell(row=row_num, column=5, value=""), bg=C_TOTAL_BG)
     ws.row_dimensions[row_num].height = 20
-
     wb.save(EXCEL_PATH)
 
 
 # ─────────────────────────────────────────
 # CLAUDE PARSEA EL MENSAJE
-# Una sola llamada: extrae datos Y categoriza
 # ─────────────────────────────────────────
 def parsear_mensaje(mensaje: str) -> dict:
     resp = claude.messages.create(
@@ -168,46 +159,66 @@ def parsear_mensaje(mensaje: str) -> dict:
         max_tokens=1000,
         system="""Eres un parser inteligente de listas de la compra. Devuelve SOLO JSON válido sin backticks ni explicaciones.
 
-Acciones posibles: añadir | eliminar | ver_categoria | ver_categorias (pido varias a la vez) | ver_tienda | ver_todo | ver_urgentes | limpiar_tienda
+Acciones posibles:
+- añadir: añadir productos a la lista
+- eliminar: borrar uno o varios productos concretos ("ya compré la leche", "quita el pan")
+- limpiar_tienda: borrar todos los productos de una tienda ("ya hice la compra de Mercadona", "limpia Mercadona")
+- limpiar_categoria: borrar todos los productos de una categoría ("limpia los muebles", "ya compré todo lo de alimentación")
+- actualizar: cambiar datos de un producto existente (tienda, cantidad, prioridad) ("el sofá cámbialo a Sklum", "la leche ponla como urgente", "necesito 3 yogures en vez de 1")
+- ver_categoria: ver productos de una categoría
+- ver_categorias: ver productos de varias categorías a la vez
+- ver_tienda: ver productos de una tienda
+- ver_todo: ver lista completa
+- ver_urgentes: ver solo urgentes
+- limpiar_tienda: borrar toda una tienda
 
-Para "añadir" extrae cada producto con:
-- producto: nombre limpio y en minúsculas
-- tienda: en minúsculas (si no dice tienda usa "sin tienda")
-- cantidad: número como string (default "1")
-- prioridad: "urgente" o "normal" (default "normal")
-- categoria: una de estas exactamente en minúsculas:
-  alimentación | higiene personal | limpieza hogar | farmacia y salud |
-  tecnología | electrodomésticos | mobiliario | textil y ropa | papelería y oficina | otros
+Categorías válidas (en minúsculas exactas):
+alimentación | higiene personal | limpieza hogar | farmacia y salud | tecnología | electrodomésticos | mobiliario | textil y ropa | papelería y oficina | otros
 
-REGLAS DE CATEGORIZACIÓN — razona con contexto, no de forma mecánica:
-- alimentación: comida, bebida, ingredientes, snacks, condimentos
-- higiene personal: cuidado corporal, cosmética, higiene bucal, desodorante, champú, maquillaje, perfume
-- limpieza hogar: productos de limpieza, bayetas, fregonas, detergente ropa, lavavajillas, ambientadores
-- farmacia y salud: medicamentos, vitaminas, tiritas, termómetros, anticonceptivos, suplementos
-- tecnología: dispositivos electrónicos, cables, accesorios tech, pilas, bombillas inteligentes
-- electrodomésticos: aparatos para el hogar con motor o calor (tostadora, aspiradora, batidora...)
-- mobiliario: muebles, estanterías, sillas, mesas, camas, almacenaje
+REGLAS DE CATEGORIZACIÓN:
+- alimentación: comida, bebida, ingredientes, snacks
+- higiene personal: cuidado corporal, cosmética, dental, champú, maquillaje, perfume
+- limpieza hogar: detergentes, bayetas, fregonas, lavavajillas, ambientadores, esponjas
+- farmacia y salud: medicamentos, vitaminas, tiritas, termómetros, suplementos
+- tecnología: electrónica, cables, pilas, bombillas inteligentes
+- electrodomésticos: aparatos con motor o calor (tostadora, aspiradora, batidora)
+- mobiliario: muebles, estanterías, sillas, mesas, camas, sofás, almacenaje
 - textil y ropa: ropa, calzado, ropa de cama, toallas, cortinas, cojines
-- papelería y oficina: papel, bolígrafos, carpetas, tóner, post-its, tijeras
-- otros: cualquier cosa que no encaje claramente en las anteriores
+- papelería y oficina: papel, bolígrafos, carpetas, post-its, tijeras
+- otros: lo que no encaje claramente
 
-Casos dudosos — razona:
-- "velas": si son decorativas → otros; si son para aromaterapia/relax → higiene personal
-- "rin": detergente → limpieza hogar
-- "tuppers": almacenaje cocina → otros
-- "colchón": mobiliario
-- "bombillas normales": tecnología
-- "esponjas": limpieza hogar
-- "termómetro": farmacia y salud
+Casos dudosos: "rin" → limpieza hogar | "velas decorativas" → otros | "velas relax" → higiene personal | "tuppers" → otros | "colchón" → mobiliario
 
-Ejemplos de respuesta:
-{"accion": "añadir", "items": [{"producto": "leche de almendra", "tienda": "mercadona", "cantidad": "2", "prioridad": "normal", "categoria": "alimentación"}]}
-{"accion": "ver_tienda", "tienda": "mercadona"}
-{"accion": "ver_categoria", "categoria": "alimentación"}
-{"accion": "eliminar", "productos": ["leche"]}
+Formatos de respuesta según acción:
+
+Añadir:
+{"accion": "añadir", "items": [{"producto": "leche", "tienda": "mercadona", "cantidad": "2", "prioridad": "normal", "categoria": "alimentación"}]}
+
+Eliminar productos concretos:
+{"accion": "eliminar", "productos": ["leche", "pan"]}
+
+Limpiar tienda entera:
 {"accion": "limpiar_tienda", "tienda": "mercadona"}
-{"accion": "ver_todo"}
+
+Limpiar categoría entera:
+{"accion": "limpiar_categoria", "categoria": "mobiliario"}
+
+Actualizar un producto (solo incluye los campos que cambian):
+{"accion": "actualizar", "producto": "sofá", "cambios": {"tienda": "sklum", "cantidad": "1", "prioridad": "urgente"}}
+
+Ver categoría:
+{"accion": "ver_categoria", "categoria": "alimentación"}
+
+Ver varias categorías:
 {"accion": "ver_categorias", "categorias": ["alimentación", "higiene personal"]}
+
+Ver tienda:
+{"accion": "ver_tienda", "tienda": "mercadona"}
+
+Ver todo:
+{"accion": "ver_todo"}
+
+Ver urgentes:
 {"accion": "ver_urgentes"}""",
         messages=[{"role": "user", "content": mensaje}]
     )
@@ -216,52 +227,95 @@ Ejemplos de respuesta:
 
 
 # ─────────────────────────────────────────
-# VISTAS FORMATEADAS EN HTML PARA TELEGRAM
+# VISTAS HTML PARA TELEGRAM
 # ─────────────────────────────────────────
-def _boton_vistas() -> list:
+def _botones_navegacion() -> list:
     return [
-        InlineKeyboardButton("📂 Por categoría", callback_data="filtro_categorias"),
-        InlineKeyboardButton("📍 Por tienda",    callback_data="filtro_tiendas"),
+        InlineKeyboardButton("📂 Categorías", callback_data="filtro_categorias"),
+        InlineKeyboardButton("📍 Tiendas",    callback_data="filtro_tiendas"),
     ]
+
 
 def formato_vista_completa(items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
     if not items:
         return "Tu lista está vacía.\n\n<i>Dime qué necesitas y lo añado.</i>", None
 
-    # Agrupar por categoría → tienda
-    from collections import defaultdict
     por_categoria = defaultdict(lambda: defaultdict(list))
     for item in items:
         por_categoria[item["categoria"]][item["tienda"]].append(item)
 
     urgentes_total = sum(1 for i in items if i["prioridad"] == "urgente")
-
     lineas = [
         "🛒 <b>LISTA DE LA COMPRA</b>",
         f"<i>{len(items)} productos · {len(por_categoria)} categorías</i>",
         "",
     ]
-
     for categoria in sorted(por_categoria.keys()):
-        emoji = emoji_categoria(categoria)
-        lineas.append(f"{emoji} <b>{categoria.upper()}</b>")
-
+        lineas.append(f"{emoji_categoria(categoria)} <b>{categoria.upper()}</b>")
         for tienda in sorted(por_categoria[categoria].keys()):
             lineas.append(f"  📍 <i>{tienda.capitalize()}</i>")
-            urgentes = [p for p in por_categoria[categoria][tienda] if p["prioridad"] == "urgente"]
-            normales  = [p for p in por_categoria[categoria][tienda] if p["prioridad"] != "urgente"]
-            for p in urgentes:
+            for p in [x for x in por_categoria[categoria][tienda] if x["prioridad"] == "urgente"]:
                 lineas.append(f"    🔴 <b>{p['producto']}</b>  ×{p['cantidad']}")
-            for p in normales:
+            for p in [x for x in por_categoria[categoria][tienda] if x["prioridad"] != "urgente"]:
                 lineas.append(f"    ⚪ {p['producto']}  ×{p['cantidad']}")
         lineas.append("")
-
     if urgentes_total:
         lineas.append("<i>🔴 urgente · ⚪ normal</i>")
 
     botones = [
-        _boton_vistas(),
+        _botones_navegacion(),
         [InlineKeyboardButton("🔴 Solo urgentes", callback_data="filtro_urgentes")],
+    ]
+    return "\n".join(lineas), InlineKeyboardMarkup(botones)
+
+
+def formato_vista_por_categorias(items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
+    if not items:
+        return "La lista está vacía.", None
+
+    por_cat = defaultdict(list)
+    for item in items:
+        por_cat[item["categoria"]].append(item)
+
+    lineas = ["📂 <b>RESUMEN POR CATEGORÍAS</b>", ""]
+    botones_cat = []
+    for cat in sorted(por_cat.keys()):
+        emoji = emoji_categoria(cat)
+        urgentes = sum(1 for p in por_cat[cat] if p["prioridad"] == "urgente")
+        badge = f"  🔴×{urgentes}" if urgentes else ""
+        lineas.append(f"{emoji} <b>{cat.upper()}</b>{badge}  —  {len(por_cat[cat])} productos")
+        botones_cat.append(
+            InlineKeyboardButton(f"{emoji} {cat.capitalize()}", callback_data=f"categoria_{cat}")
+        )
+
+    lineas.append("\n<i>Pulsa una categoría para ver su detalle</i>")
+    filas = [botones_cat[i:i+2] for i in range(0, len(botones_cat), 2)]
+    filas.append([InlineKeyboardButton("📋 Ver todo", callback_data="filtro_todo")])
+    return "\n".join(lineas), InlineKeyboardMarkup(filas)
+
+
+def formato_vista_categoria(categoria: str, items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
+    filtrados = [i for i in items if i["categoria"].lower() == categoria.lower()]
+    if not filtrados:
+        return f"No tienes nada en <b>{categoria}</b>.", None
+
+    por_tienda = defaultdict(list)
+    for item in filtrados:
+        por_tienda[item["tienda"]].append(item)
+
+    emoji = emoji_categoria(categoria)
+    lineas = [f"{emoji} <b>{categoria.upper()}</b>", f"<i>{len(filtrados)} productos</i>", ""]
+    for tienda in sorted(por_tienda.keys()):
+        lineas.append(f"📍 <i>{tienda.capitalize()}</i>")
+        for p in [x for x in por_tienda[tienda] if x["prioridad"] == "urgente"]:
+            lineas.append(f"  🔴 <b>{p['producto']}</b>  ×{p['cantidad']}")
+        for p in [x for x in por_tienda[tienda] if x["prioridad"] != "urgente"]:
+            lineas.append(f"  ⚪ {p['producto']}  ×{p['cantidad']}")
+        lineas.append("")
+
+    botones = [
+        _botones_navegacion(),
+        [InlineKeyboardButton("📋 Ver todo", callback_data="filtro_todo")],
     ]
     return "\n".join(lineas), InlineKeyboardMarkup(botones)
 
@@ -269,70 +323,27 @@ def formato_vista_completa(items: list[dict]) -> tuple[str, InlineKeyboardMarkup
 def formato_vista_multicategoria(categorias: list[str], items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
     filtrados = [i for i in items if i["categoria"].lower() in [c.lower() for c in categorias]]
     if not filtrados:
-        cats = ", ".join(categorias)
-        return f"No tienes nada en <b>{cats}</b>.", None
+        return f"No tienes nada en esas categorías.", None
 
-    from collections import defaultdict
     por_categoria = defaultdict(lambda: defaultdict(list))
     for item in filtrados:
         por_categoria[item["categoria"]][item["tienda"]].append(item)
 
     nombres = " · ".join([f"{emoji_categoria(c)} {c}" for c in sorted(categorias)])
-    lineas = [
-        f"<b>{nombres.upper()}</b>",
-        f"<i>{len(filtrados)} productos</i>",
-        "",
-    ]
-
+    lineas = [f"<b>{nombres.upper()}</b>", f"<i>{len(filtrados)} productos</i>", ""]
     for cat in sorted(por_categoria.keys()):
-        emoji = emoji_categoria(cat)
-        lineas.append(f"{emoji} <b>{cat.upper()}</b>")
+        lineas.append(f"{emoji_categoria(cat)} <b>{cat.upper()}</b>")
         for tienda in sorted(por_categoria[cat].keys()):
             lineas.append(f"  📍 <i>{tienda.capitalize()}</i>")
-            urgentes = [p for p in por_categoria[cat][tienda] if p["prioridad"] == "urgente"]
-            normales  = [p for p in por_categoria[cat][tienda] if p["prioridad"] != "urgente"]
-            for p in urgentes:
+            for p in [x for x in por_categoria[cat][tienda] if x["prioridad"] == "urgente"]:
                 lineas.append(f"    🔴 <b>{p['producto']}</b>  ×{p['cantidad']}")
-            for p in normales:
+            for p in [x for x in por_categoria[cat][tienda] if x["prioridad"] != "urgente"]:
                 lineas.append(f"    ⚪ {p['producto']}  ×{p['cantidad']}")
         lineas.append("")
 
     botones = [
-        [InlineKeyboardButton("📂 Ver categorías", callback_data="filtro_categorias")],
-        [InlineKeyboardButton("📋 Ver todo",        callback_data="filtro_todo")],
-    ]
-    return "\n".join(lineas), InlineKeyboardMarkup(botones)
-
-def formato_vista_categoria(categoria: str, items: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
-    filtrados = [i for i in items if i["categoria"].lower() == categoria.lower()]
-    if not filtrados:
-        return f"No tienes nada en <b>{categoria}</b>.", None
-
-    from collections import defaultdict
-    por_tienda = defaultdict(list)
-    for item in filtrados:
-        por_tienda[item["tienda"]].append(item)
-
-    emoji = emoji_categoria(categoria)
-    lineas = [
-        f"{emoji} <b>{categoria.upper()}</b>",
-        f"<i>{len(filtrados)} productos</i>",
-        "",
-    ]
-
-    for tienda in sorted(por_tienda.keys()):
-        lineas.append(f"📍 <i>{tienda.capitalize()}</i>")
-        urgentes = [p for p in por_tienda[tienda] if p["prioridad"] == "urgente"]
-        normales  = [p for p in por_tienda[tienda] if p["prioridad"] != "urgente"]
-        for p in urgentes:
-            lineas.append(f"  🔴 <b>{p['producto']}</b>  ×{p['cantidad']}")
-        for p in normales:
-            lineas.append(f"  ⚪ {p['producto']}  ×{p['cantidad']}")
-        lineas.append("")
-
-    botones = [
-        [InlineKeyboardButton("📂 Ver categorías", callback_data="filtro_categorias")],
-        [InlineKeyboardButton("📋 Ver todo",        callback_data="filtro_todo")],
+        _botones_navegacion(),
+        [InlineKeyboardButton("📋 Ver todo", callback_data="filtro_todo")],
     ]
     return "\n".join(lineas), InlineKeyboardMarkup(botones)
 
@@ -341,19 +352,16 @@ def formato_vista_tiendas(items: list[dict]) -> tuple[str, InlineKeyboardMarkup 
     if not items:
         return "La lista está vacía.", None
 
-    from collections import defaultdict
     por_tienda = defaultdict(list)
     for item in items:
         por_tienda[item["tienda"]].append(item)
 
     lineas = ["📍 <b>RESUMEN POR TIENDAS</b>", ""]
     botones_tienda = []
-
     for tienda in sorted(por_tienda.keys()):
-        productos = por_tienda[tienda]
-        urgentes = sum(1 for p in productos if p["prioridad"] == "urgente")
+        urgentes = sum(1 for p in por_tienda[tienda] if p["prioridad"] == "urgente")
         badge = f"  🔴×{urgentes}" if urgentes else ""
-        lineas.append(f"<b>{tienda.upper()}</b>{badge}  —  {len(productos)} productos")
+        lineas.append(f"<b>{tienda.upper()}</b>{badge}  —  {len(por_tienda[tienda])} productos")
         botones_tienda.append(
             InlineKeyboardButton(f"📍 {tienda.capitalize()}", callback_data=f"tienda_{tienda.lower()}")
         )
@@ -369,32 +377,23 @@ def formato_vista_tienda(tienda: str, items: list[dict]) -> tuple[str, InlineKey
     if not filtrados:
         return f"No tienes nada pendiente en <b>{tienda.upper()}</b>.", None
 
-    from collections import defaultdict
     por_categoria = defaultdict(list)
     for item in filtrados:
         por_categoria[item["categoria"]].append(item)
 
-    lineas = [
-        f"📍 <b>{tienda.upper()}</b>",
-        f"<i>{len(filtrados)} productos pendientes</i>",
-        "",
-    ]
-
+    lineas = [f"📍 <b>{tienda.upper()}</b>", f"<i>{len(filtrados)} productos pendientes</i>", ""]
     for cat in sorted(por_categoria.keys()):
-        emoji = emoji_categoria(cat)
-        lineas.append(f"{emoji} <i>{cat.capitalize()}</i>")
-        urgentes = [p for p in por_categoria[cat] if p["prioridad"] == "urgente"]
-        normales  = [p for p in por_categoria[cat] if p["prioridad"] != "urgente"]
-        for p in urgentes:
+        lineas.append(f"{emoji_categoria(cat)} <i>{cat.capitalize()}</i>")
+        for p in [x for x in por_categoria[cat] if x["prioridad"] == "urgente"]:
             lineas.append(f"  🔴 <b>{p['producto']}</b>  ×{p['cantidad']}")
-        for p in normales:
+        for p in [x for x in por_categoria[cat] if x["prioridad"] != "urgente"]:
             lineas.append(f"  ⚪ {p['producto']}  ×{p['cantidad']}")
         lineas.append("")
 
     botones = [
         [InlineKeyboardButton("✅ Compra hecha — borrar tienda", callback_data=f"limpiar_{tienda.lower()}")],
-        [InlineKeyboardButton("📍 Ver tiendas", callback_data="filtro_tiendas"),
-         InlineKeyboardButton("📋 Ver todo",    callback_data="filtro_todo")],
+        _botones_navegacion(),
+        [InlineKeyboardButton("📋 Ver todo", callback_data="filtro_todo")],
     ]
     return "\n".join(lineas), InlineKeyboardMarkup(botones)
 
@@ -404,7 +403,6 @@ def formato_vista_urgentes(items: list[dict]) -> tuple[str, InlineKeyboardMarkup
     if not urgentes:
         return "No tienes nada urgente pendiente. 🎉", None
 
-    from collections import defaultdict
     por_tienda = defaultdict(list)
     for item in urgentes:
         por_tienda[item["tienda"]].append(item)
@@ -429,11 +427,11 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
         accion         = parsed.get("accion", "ver_todo")
         items_actuales = leer_items()
 
+        # ── AÑADIR ──────────────────────────────────────────
         if accion == "añadir":
             nuevos = parsed.get("items", [])
             if not nuevos:
                 return "No entendí qué quieres añadir. Prueba: <i>leche x2 en Mercadona</i>", None
-
             existentes = {(i["producto"].lower(), i["tienda"].lower()) for i in items_actuales}
             añadidos = []
             for item in nuevos:
@@ -442,24 +440,20 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
                     items_actuales.append(item)
                     añadidos.append(item)
                     existentes.add(key)
-
             guardar_excel(items_actuales)
-
             if not añadidos:
                 return "Esos productos ya estaban en la lista.", None
-
             lineas = ["✅ <b>Añadido a la lista:</b>", ""]
             for i in añadidos:
-                emoji = emoji_categoria(i.get("categoria", "otros"))
                 prior = "🔴" if i["prioridad"] == "urgente" else "⚪"
                 lineas.append(
                     f"  {prior} <b>{i['producto']}</b>  ×{i['cantidad']}\n"
-                    f"      {emoji} <i>{i.get('categoria', 'otros')} · {i['tienda']}</i>"
+                    f"      {emoji_categoria(i.get('categoria','otros'))} <i>{i.get('categoria','otros')} · {i['tienda']}</i>"
                 )
-
             botones = [[InlineKeyboardButton("📋 Ver lista completa", callback_data="filtro_todo")]]
             return "\n".join(lineas), InlineKeyboardMarkup(botones)
 
+        # ── ELIMINAR PRODUCTOS CONCRETOS ────────────────────
         elif accion == "eliminar":
             productos_borrar = [p.lower() for p in parsed.get("productos", [])]
             antes = len(items_actuales)
@@ -468,9 +462,11 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
             guardar_excel(items_actuales)
             if borrados == 0:
                 return "No encontré esos productos en la lista.", None
+            nombres = ", ".join(parsed.get("productos", []))
             botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
-            return f"🗑 <b>{borrados} producto(s) eliminado(s).</b>", InlineKeyboardMarkup(botones)
+            return f"🗑 <b>Eliminado:</b> <i>{nombres}</i>", InlineKeyboardMarkup(botones)
 
+        # ── LIMPIAR TIENDA ENTERA ───────────────────────────
         elif accion == "limpiar_tienda":
             tienda = parsed.get("tienda", "").lower()
             antes = len(items_actuales)
@@ -484,6 +480,66 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
                 InlineKeyboardMarkup(botones)
             )
 
+        # ── LIMPIAR CATEGORÍA ENTERA ────────────────────────
+        elif accion == "limpiar_categoria":
+            categoria = parsed.get("categoria", "").lower()
+            antes = len(items_actuales)
+            items_actuales = [i for i in items_actuales if i["categoria"].lower() != categoria]
+            borrados = antes - len(items_actuales)
+            guardar_excel(items_actuales)
+            emoji = emoji_categoria(categoria)
+            botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
+            return (
+                f"✅ {emoji} <b>{categoria.capitalize()} limpiado.</b>\n"
+                f"<i>{borrados} productos eliminados.</i>",
+                InlineKeyboardMarkup(botones)
+            )
+
+        # ── ACTUALIZAR PRODUCTO ─────────────────────────────
+        elif accion == "actualizar":
+            nombre_buscar = parsed.get("producto", "").lower()
+            cambios       = parsed.get("cambios", {})
+
+            # Buscar el producto (búsqueda flexible)
+            encontrado = None
+            for item in items_actuales:
+                if nombre_buscar in item["producto"].lower() or item["producto"].lower() in nombre_buscar:
+                    encontrado = item
+                    break
+
+            if not encontrado:
+                return (
+                    f"No encontré <b>{parsed.get('producto','')}</b> en la lista.\n"
+                    f"<i>¿Quizás está con otro nombre?</i>",
+                    None
+                )
+
+            nombre_original = encontrado["producto"]
+            cambios_aplicados = []
+
+            if "tienda" in cambios:
+                encontrado["tienda"] = cambios["tienda"].lower()
+                cambios_aplicados.append(f"tienda → <i>{cambios['tienda']}</i>")
+            if "cantidad" in cambios:
+                encontrado["cantidad"] = cambios["cantidad"]
+                cambios_aplicados.append(f"cantidad → <i>×{cambios['cantidad']}</i>")
+            if "prioridad" in cambios:
+                encontrado["prioridad"] = cambios["prioridad"]
+                emoji_p = "🔴" if cambios["prioridad"] == "urgente" else "⚪"
+                cambios_aplicados.append(f"prioridad → {emoji_p} <i>{cambios['prioridad']}</i>")
+            if "categoria" in cambios:
+                encontrado["categoria"] = cambios["categoria"].lower()
+                cambios_aplicados.append(f"categoría → <i>{cambios['categoria']}</i>")
+
+            guardar_excel(items_actuales)
+            resumen = "\n  ".join(cambios_aplicados)
+            botones = [[InlineKeyboardButton("📋 Ver lista", callback_data="filtro_todo")]]
+            return (
+                f"✏️ <b>{nombre_original}</b> actualizado:\n  {resumen}",
+                InlineKeyboardMarkup(botones)
+            )
+
+        # ── VISTAS ──────────────────────────────────────────
         elif accion == "ver_urgentes":
             return formato_vista_urgentes(items_actuales)
 
@@ -494,9 +550,8 @@ async def agente_compra(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]
             return formato_vista_categoria(parsed.get("categoria", "otros"), items_actuales)
 
         elif accion == "ver_categorias":
-            categorias = parsed.get("categorias", [])
-            return formato_vista_multicategoria(categorias, items_actuales)
-            
+            return formato_vista_multicategoria(parsed.get("categorias", []), items_actuales)
+
         else:
             return formato_vista_completa(items_actuales)
 
