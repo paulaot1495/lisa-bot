@@ -4,9 +4,10 @@ ia.py — Capa de inteligencia artificial del agente de nutrición.
 Responsabilidad única: comunicarse con Claude.
 NO detecta intenciones. NO toca el Excel. NO sabe nada de Telegram.
 
-Dos funciones públicas:
+Tres funciones públicas:
   - calcular_macros()    → analiza alimentos y devuelve valores nutricionales
   - analizar_historial() → analiza el registro y genera un resumen para el usuario
+  - generar_menu()       → recibe el CSV de alimentos y genera un menú HTML personalizado
 
 Protecciones incluidas:
   - Reintentos automáticos ante fallos de red (Bug 2)
@@ -45,7 +46,6 @@ def _llamar_claude_con_reintentos(*, model: str, max_tokens: int,
     """
     Llama a la API de Claude con reintentos exponenciales ante fallos de red.
     Devuelve el texto de la respuesta o lanza ValueError tras agotar los intentos.
-    (Bug 2)
     """
     ultimo_error = None
     for intento in range(_MAX_REINTENTOS):
@@ -75,7 +75,7 @@ def _llamar_claude_con_reintentos(*, model: str, max_tokens: int,
 def _validar_totales(totales: dict) -> None:
     """
     Valida que el objeto totales tenga todos los campos obligatorios
-    y que sus valores sean numéricos. (Bug 3)
+    y que sus valores sean numéricos.
     """
     for campo in _CAMPOS_TOTALES:
         if campo not in totales:
@@ -165,14 +165,14 @@ def calcular_macros(mensaje: str, base_nutricional: dict) -> dict:
         logger.error("JSON inválido en calcular_macros: %s\nRaw: %s", e, raw)
         raise ValueError(f"Respuesta no parseable de Claude: {e}") from e
 
-    # Validar campos obligatorios de primer nivel
     for campo in ("descripcion_comida", "alimentos", "totales"):
         if campo not in datos:
             raise ValueError(f"Campo obligatorio ausente en respuesta de Claude: {campo!r}")
 
-    # Validar todos los campos de totales y que sean numéricos (Bug 3)
-    _validar_totales(datos["totales"])
+    if not isinstance(datos["alimentos"], list):
+        raise ValueError(f"'alimentos' debe ser una lista, recibido: {type(datos['alimentos'])}")
 
+    _validar_totales(datos["totales"])
     return datos
 
 
@@ -228,3 +228,90 @@ def analizar_historial(mensaje: str, registros: list[dict]) -> str:
         raise ValueError("Claude devolvió una respuesta vacía")
 
     return respuesta
+
+
+# ── generar_menu ──────────────────────────────────────────────────────────────
+
+_SYSTEM_MENU = """Eres un creador de recetas healthy, nutricionista experto y chef creativo que siempre esta al tanto de las ultimas tendencias en recetas sanas. Genera un menú personalizado en HTML.
+
+DATOS QUE RECIBES:
+- Un CSV con el historial de alimentos del usuario (solo fecha y nombre del alimento)
+- La petición del usuario con los macros objetivo y número de días
+- El modo: "habitual" o "innovador"
+
+TU PROCESO (hazlo internamente, no lo muestres):
+1. Lee el CSV y normaliza los nombres: "pechuga pollo plancha" y "pollo a la plancha" → "pollo"
+2. Agrupa por nombre normalizado y cuenta frecuencias
+3. Identifica los alimentos más habituales del usuario
+4. Genera el menú usando esos datos
+5. Usa tu conocimiento nutricional para calcular los macros de cada alimento y comida
+
+REGLAS DEL MENÚ:
+- Organiza cada día en: Desayuno, Almuerzo, Merienda, Cena
+- Decide qué va en cada comida según el tipo de alimento (no te lo dirán)
+- Incluye cantidades en gramos para cada alimento
+- Prioriza verduras, frutas y proteina.
+- Calcula tú los macros de cada comida (kcal, proteínas, CH, grasas) usando tu conocimiento
+- El total diario debe aproximarse a los macros objetivo del usuario (±10%)
+- Modo habitual: usa principalmente los alimentos frecuentes del usuario
+- Modo innovador: ~50% alimentos frecuentes del usuario, ~50% recetas creativas nuevas
+
+FORMATO DE SALIDA:
+Devuelve ÚNICAMENTE el HTML completo de la página, sin texto adicional ni bloques markdown.
+El HTML debe ser una página web bonita, moderna y legible:
+- Diseño limpio con paleta verde/azul saludable
+- Cards por día con secciones visuales para cada comida
+- Tabla de macros al final de cada día
+- Resumen total de macros al final del menú
+- Tipografía clara, jerarquía visual bien definida
+- Responsive (que se vea bien en móvil)
+- Todo el CSS inline o en un bloque <style> en el <head>"""
+
+
+def generar_menu(
+    mensaje: str,
+    csv_alimentos: str,
+    modo: str,
+    dias: int,
+) -> str:
+    """
+    Genera un menú personalizado en HTML a partir del CSV de alimentos.
+
+    Claude recibe el CSV bruto (fecha, alimento) y hace él mismo la normalización,
+    agrupación por frecuencia y cálculo de macros con su conocimiento nutricional.
+
+    Args:
+        mensaje:       Petición del usuario con macros objetivo y número de días.
+        csv_alimentos: Contenido del CSV (output de storage.leer_csv_alimentos).
+        modo:          "habitual" | "innovador"
+        dias:          Número de días del menú.
+
+    Returns: String con el HTML completo de la página.
+    Raises:  ValueError si Claude falla o devuelve respuesta vacía.
+    """
+    hoy = datetime.now().strftime("%d/%m/%Y")
+
+    prompt = (
+        f"Fecha de hoy: {hoy}\n"
+        f"Petición: \"{mensaje}\"\n"
+        f"Días solicitados: {dias}\n"
+        f"Modo: {modo}\n\n"
+        f"CSV con historial de alimentos del usuario:\n"
+        f"```csv\n{csv_alimentos}\n```\n\n"
+        f"Genera el menú en HTML."
+    )
+
+    html = _llamar_claude_con_reintentos(
+        model="claude-sonnet-4-5",  # Sonnet: mejor calidad para HTML complejo
+        max_tokens=4096,
+        system=_SYSTEM_MENU,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    if not html or len(html) < 200:
+        raise ValueError("Claude devolvió un HTML vacío o demasiado corto")
+
+    # Limpiar bloques markdown por si Claude los añade
+    html = re.sub(r"^```(?:html)?\s*|\s*```$", "", html.strip(), flags=re.MULTILINE).strip()
+
+    return html
