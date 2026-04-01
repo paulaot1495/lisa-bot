@@ -97,7 +97,7 @@ _BORRAR_DIA = [
 _CONSULTAR = [
     # Primera persona
     "qué he comido", "que he comido",
-    "qué llevo", "que llevo",
+    "que llevo", "llevo",
     "cuánto llevo", "cuanto llevo",
     "mis macros", "mis calorías", "mis calorias",
     "resumen", "historial", "mi registro",
@@ -106,6 +106,7 @@ _CONSULTAR = [
     "revísame", "revisame", "revisar",
     "muéstrame", "muestrame", "enséñame", "ensenname",
     "cuántas calorías", "cuantas calorias",
+    "cuántas macros", "cuantas macros",
     "estadísticas", "estadisticas",
     "análisis", "analisis",
     "qué he desayunado", "que he desayunado",

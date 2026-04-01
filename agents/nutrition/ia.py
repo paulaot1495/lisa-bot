@@ -179,6 +179,7 @@ def calcular_macros(mensaje: str, base_nutricional: dict) -> dict:
 # ── analizar_historial ────────────────────────────────────────────────────────
 
 _SYSTEM_HISTORIAL = """Eres Lisa, una AI Manager especializada en nutrición.
+Normalmente las calorias que debo consumir son de una persona de 56kg y 165cm que quiere perder grasa y ganar músculo.
 Recibes el historial nutricional del usuario y debes analizarlo de forma clara, concisa y útil.
 
 Formato de respuesta:
