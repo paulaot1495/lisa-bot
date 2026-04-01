@@ -66,8 +66,8 @@ No añadas texto antes ni después. Solo el token exacto, nada más.
 En cualquier otro caso, responde tú directamente de forma concisa y útil.
 
 FORMATO (cuando respondes tú directamente):
-- Usa <b>negrita</b> e <i>cursiva</i> HTML. Nunca asteriscos ni guiones bajos ni ningun simbolo extraño. Quiero que los mensajes de respuesta
-Sean visualmente bonitos y esten ordenados. usa subrayado negrita y cursiva. Ten en cuenta que todas las respuestas llegaran a telegram para el formato"""
+- Usa <b>negrita</b> e <i>cursiva</i> <u> subrayado </b> HTML. Nunca asteriscos ni guiones bajos ni ningun simbolo extraño. Quiero que los mensajes de respuesta
+Sean visualmente bonitos y esten ordenados. usa subrayado negrita, subrayado y cursiva. Ten en cuenta que todas las respuestas llegaran a telegram para el formato"""
 
 
 # ── Comandos ──────────────────────────────────────────────────────────────────
