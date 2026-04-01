@@ -1,6 +1,18 @@
 """
 agent.py — Agente de nutrición.
-Detecta intención → llama a ia.py o storage.py → devuelve respuesta + teclado opcional.
+
+Responsabilidad: orquestar ia.py y storage.py para responder al usuario.
+
+Flujo:
+  1. main.py llama a run(mensaje) cuando detecta que el usuario quiere nutrición
+  2. agent.py llama a ia.interpretar() para entender la intención
+  3. Según la intención, llama a storage para leer/escribir
+  4. Devuelve (texto_respuesta, teclado_opcional) a main.py
+
+Separación clara:
+  - ia.py     → solo habla con Claude
+  - storage.py → solo toca el Excel
+  - agent.py  → solo coordina y construye respuestas para Telegram
 """
 
 import logging
@@ -12,168 +24,180 @@ from . import ia, storage
 
 logger = logging.getLogger(__name__)
 
-# ── Detección de intención ────────────────────────────────────────────────────
+# Tipo de retorno estándar del agente
+AgentResponse = tuple[str, InlineKeyboardMarkup | None]
 
-_PALABRAS_COMIDA = [
-    "comí", "comi", "desayuné", "desayune", "almorcé", "almorce",
-    "merendé", "merende", "cené", "cene", "tomé", "tome", "bebí", "bebi",
-    "desayuno", "almuerzo", "comida", "merienda", "cena", "snack",
-    "he comido", "he desayunado", "he cenado", "he almorzado",
-    "me he comido", "me tomé", "ayer comí", "ayer cené", "ayer desayuné",
-]
-_PALABRAS_RESET = [
-    "borrar comidas", "borrar registro", "resetear comidas", "resetear nutricion",
-    "borrar nutricion", "empezar de cero", "limpiar excel", "limpiar comidas",
-    "eliminar comidas", "reset comidas",
-]
-_PALABRAS_CONSULTA = [
-    "macros de hoy", "macros de ayer", "que llevo hoy", "que llevo comido",
-    "cuanto llevo", "resumen de hoy", "resumen de ayer", "resumen del dia",
-    "resumen de la semana", "resumen semanal", "resumen del mes", "resumen mensual",
-    "como voy", "tendencias", "analisis", "cuantas calorias llevo",
-    "mis macros", "mi registro", "ver registro", "historial",
-    "media semanal", "estadisticas",
-]
 
-def es_comida(msg: str) -> bool:
-    return any(p in msg.lower() for p in _PALABRAS_COMIDA)
+# ── Helpers de formato ────────────────────────────────────────────────────────
 
-def es_reset(msg: str) -> bool:
-    return any(p in msg.lower() for p in _PALABRAS_RESET)
-
-def es_consulta(msg: str) -> bool:
-    return any(p in msg.lower() for p in _PALABRAS_CONSULTA)
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _detectar_fecha(msg: str) -> datetime:
-    if any(p in msg.lower() for p in ["ayer", "anoche"]):
+def _detectar_fecha(mensaje: str) -> datetime:
+    """Devuelve ayer si el mensaje lo menciona, hoy en caso contrario."""
+    if any(p in mensaje.lower() for p in ["ayer", "anoche"]):
         return datetime.now() - timedelta(days=1)
     return datetime.now()
 
-def _rango_consulta(msg: str) -> int:
-    m = msg.lower()
-    if any(p in m for p in ["mes", "mensual", "30 dias"]):
-        return 30
-    if any(p in m for p in ["semana", "semanal", "7 dias"]):
-        return 7
-    if "ayer" in m:
-        return 2
-    return 1
 
-def _teclado_reset(fecha_str: str, scope: str) -> InlineKeyboardMarkup:
-    fecha_enc = fecha_str.replace("/", "-")
+def _teclado_confirmacion(fecha_str: str, scope: str) -> InlineKeyboardMarkup:
+    """Genera el teclado inline de confirmación para borrados."""
+    fecha_enc = fecha_str.replace("/", "-")  # '/' no permitido en callback_data
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Sí, borrar", callback_data=f"nutr_confirm_{scope}_{fecha_enc}"),
-        InlineKeyboardButton("Cancelar", callback_data="nutr_cancel"),
+        InlineKeyboardButton(
+            "✅ Sí, borrar",
+            callback_data=f"nutr_confirm_{scope}_{fecha_enc}",
+        ),
+        InlineKeyboardButton(
+            "❌ Cancelar",
+            callback_data="nutr_cancel",
+        ),
     ]])
 
-def _respuesta_comida(datos: dict, fecha_str: str, es_ayer: bool, es_nueva: bool) -> str:
-    t = datos["totales"]
+
+def _formatear_respuesta_registro(
+    datos: dict,
+    fecha_str: str,
+    es_ayer: bool,
+    es_nueva: bool,
+) -> str:
+    """Construye el mensaje HTML que se envía al usuario tras registrar."""
+    t      = datos["totales"]
+    dia    = "Día anterior" if es_ayer else "Hoy"
     estado = "nueva entrada" if es_nueva else "sumado a lo anterior"
-    dia = "Día anterior" if es_ayer else "Hoy"
 
     desglose = ""
-    for a in datos.get("alimentos", []):
+    for alimento in datos.get("alimentos", []):
         desglose += (
-            f"  <b>{a['nombre']}</b> ({a.get('cantidad_g', '?')}g)\n"
-            f"    {a['calorias']:.0f} kcal | {a['proteinas']:.1f}g prot | "
-            f"{a['carbohidratos']:.1f}g CH | {a['grasas']:.1f}g grasa\n"
+            f"  <b>{alimento['nombre']}</b> ({alimento.get('cantidad_g', '?')}g)\n"
+            f"    {alimento['calorias']:.0f} kcal  |  "
+            f"{alimento['proteinas']:.1f}g prot  |  "
+            f"{alimento['carbohidratos']:.1f}g CH  |  "
+            f"{alimento['grasas']:.1f}g grasa\n"
         )
 
     return (
         f"{dia} — <b>{fecha_str}</b> <i>({estado})</i>\n\n"
         f"<b>{datos['descripcion_comida']}</b>\n\n"
-        f"<b>Desglose:</b>\n{desglose}\n"
-        f"<b>Total acumulado:</b>\n"
-        f"  Calorías:      <b>{t['calorias']:.0f} kcal</b>\n"
-        f"  Proteínas:     <b>{t['proteinas']:.1f} g</b>\n"
-        f"  Carbohidratos: <b>{t['carbohidratos']:.1f} g</b>\n"
-        f"  Grasas:        <b>{t['grasas']:.1f} g</b>\n"
-        f"  Azúcar:        <b>{t['azucar']:.1f} g</b>\n"
-        f"  Fibra:         <b>{t['fibra']:.1f} g</b>\n\n"
-        f"<i>Excel actualizado.</i>"
+        f"<b>Desglose por alimento:</b>\n"
+        f"{desglose}\n"
+        f"<b>Total acumulado del día:</b>\n"
+        f"  Calorías:       <b>{t['calorias']:.0f} kcal</b>\n"
+        f"  Proteínas:      <b>{t['proteinas']:.1f} g</b>\n"
+        f"  Carbohidratos:  <b>{t['carbohidratos']:.1f} g</b>\n"
+        f"  Grasas:         <b>{t['grasas']:.1f} g</b>\n"
+        f"  Azúcar:         <b>{t['azucar']:.1f} g</b>\n"
+        f"  Fibra:          <b>{t['fibra']:.1f} g</b>\n\n"
+        f"<i>✅ Guardado en el Excel.</i>"
     )
 
-# ── Punto de entrada único ────────────────────────────────────────────────────
 
-async def run(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]:
-    """Main llama aquí. Detecta intención y ejecuta lo que toca."""
-    if es_reset(mensaje):
-        return await _handle_reset(mensaje)
-    if es_consulta(mensaje):
-        return await _handle_consulta(mensaje)
-    if es_comida(mensaje):
-        return await _handle_comida(mensaje)
-    return "No entendí qué querías hacer con el registro nutricional.", None
+# ── Punto de entrada principal ────────────────────────────────────────────────
 
-# ── Handlers internos ─────────────────────────────────────────────────────────
+async def run(mensaje: str) -> AgentResponse:
+    """
+    Punto de entrada único. main.py llama aquí.
 
-async def _handle_comida(mensaje: str) -> tuple[str, None]:
-    fecha = _detectar_fecha(mensaje)
+    1. Carga contexto (base nutricional + historial últimos 30 días)
+    2. Pide a Claude que interprete la intención
+    3. Ejecuta la acción correspondiente
+    4. Devuelve (texto, teclado) para que main.py lo envíe por Telegram
+    """
+    fecha  = _detectar_fecha(mensaje)
     es_ayer = (datetime.now() - fecha).days >= 1
-    base = storage.cargar_base_nutricional()
 
+    # Cargar contexto para Claude
+    base      = storage.cargar_base_nutricional()
+    historial = storage.leer_registros(dias=30)
+
+    # Claude interpreta el mensaje
     try:
-        datos = ia.analizar_comida(mensaje, base)
-    except Exception as e:
-        logger.error(f"Error IA: {e}")
-        return "No pude analizar la información nutricional. Inténtalo de nuevo.", None
-
-    ok, es_nueva = storage.guardar_comida(datos, fecha)
-    if not ok:
-        return "Error al guardar en el Excel. Revisa que /data esté montado.", None
-
-    return _respuesta_comida(datos, fecha.strftime("%d/%m/%Y"), es_ayer, es_nueva), None
-
-
-async def _handle_reset(mensaje: str) -> tuple[str, InlineKeyboardMarkup]:
-    m = mensaje.lower()
-    if any(p in m for p in ["todo", "registro", "excel", "cero", "completo"]):
+        intencion, datos = ia.interpretar(mensaje, base, historial)
+    except ValueError as e:
+        logger.error("Error interpretando mensaje: %s", e)
         return (
-            "<b>¿Seguro que quieres borrar TODO el registro?</b>\n\n"
-            "Se eliminará el Excel completo. <i>No se puede deshacer.</i>",
-            _teclado_reset(datetime.now().strftime("%d/%m/%Y"), "todo")
+            "No pude entender tu mensaje nutricional. "
+            "Intenta ser más específico (ej: <i>he comido 200g de pollo y arroz</i>).",
+            None,
         )
-    fecha = _detectar_fecha(mensaje)
-    fecha_str = fecha.strftime("%d/%m/%Y")
-    dia_label = "ayer" if (datetime.now() - fecha).days >= 1 else "hoy"
-    return (
-        f"<b>¿Seguro que quieres borrar el registro de {dia_label} ({fecha_str})?</b>\n\n"
-        f"Se eliminará solo esa fila. <i>No se puede deshacer.</i>",
-        _teclado_reset(fecha_str, "dia")
-    )
+
+    # ── Registrar comida ──────────────────────────────────────────────────────
+    if intencion == "registrar":
+        ok, es_nueva = storage.guardar_comida(datos, fecha)
+        if not ok:
+            return (
+                "❌ Error al guardar en el Excel. "
+                "Revisa que el volumen <code>/data</code> esté montado en Railway.",
+                None,
+            )
+        return _formatear_respuesta_registro(
+            datos, fecha.strftime("%d/%m/%Y"), es_ayer, es_nueva
+        ), None
+
+    # ── Consultar historial ───────────────────────────────────────────────────
+    if intencion == "consultar":
+        respuesta = datos.get("respuesta", "")
+        if not respuesta:
+            return "No encontré datos para analizar en tu registro.", None
+        return respuesta, None
+
+    # ── Borrar un día (pide confirmación) ────────────────────────────────────
+    if intencion == "borrar_dia":
+        fecha_str = fecha.strftime("%d/%m/%Y")
+        dia_label = "ayer" if es_ayer else "hoy"
+        return (
+            f"<b>¿Seguro que quieres borrar el registro de {dia_label} ({fecha_str})?</b>\n\n"
+            f"Se eliminará solo esa fila del Excel.\n"
+            f"<i>Esta acción no se puede deshacer.</i>",
+            _teclado_confirmacion(fecha_str, "dia"),
+        )
+
+    # ── Borrar todo (pide confirmación) ──────────────────────────────────────
+    if intencion == "borrar_todo":
+        fecha_str = datetime.now().strftime("%d/%m/%Y")
+        return (
+            "<b>¿Seguro que quieres borrar TODO el registro nutricional?</b>\n\n"
+            "Se eliminará el Excel completo y se creará uno nuevo vacío.\n"
+            "<i>Esta acción no se puede deshacer.</i>",
+            _teclado_confirmacion(fecha_str, "todo"),
+        )
+
+    # No debería llegar aquí (ia.interpretar ya valida la intención)
+    return "Acción no reconocida.", None
 
 
-async def _handle_consulta(mensaje: str) -> tuple[str, None]:
-    dias = _rango_consulta(mensaje)
-    registros = storage.leer_registros(dias)
+# ── Handler de callbacks (botones inline) ─────────────────────────────────────
 
-    if not registros:
-        periodo = {1: "hoy", 7: "esta semana", 30: "este mes"}.get(dias, f"los últimos {dias} días")
-        return f"No tengo datos para {periodo}. Cuéntame qué has comido y lo apunto.", None
-
-    return ia.analizar_registro(mensaje, registros, dias), None
-
-
-async def handle_callback(data: str) -> tuple[str, None]:
-    """Maneja los botones de confirmación de reset."""
+async def handle_callback(data: str) -> AgentResponse:
+    """
+    Gestiona las respuestas a los botones de confirmación de borrado.
+    main.py llama aquí cuando recibe un callback_data que empieza por 'nutr_'.
+    """
     if data == "nutr_cancel":
-        return "Cancelado. El registro sigue intacto.", None
+        return "Cancelado. El registro no se ha modificado. 👍", None
 
     if data.startswith("nutr_confirm_"):
-        partes = data.split("_", 3)
-        scope = partes[2]
+        # Formato: nutr_confirm_{scope}_{fecha_enc}
+        # Usamos maxsplit=3 para que la fecha no se parta si contiene '_'
+        partes    = data.split("_", 3)
+        scope     = partes[2]                                    # "dia" o "todo"
         fecha_str = partes[3].replace("-", "/") if len(partes) > 3 else ""
 
         if scope == "todo":
             ok = storage.borrar_todo()
-            return ("<b>Registro completo borrado.</b> Excel vacío y listo.", None) if ok \
-                else ("No pude borrar el Excel.", None)
+            return (
+                "<b>✅ Registro completo eliminado.</b>\n"
+                "El Excel está vacío y listo para empezar de cero.",
+                None,
+            ) if ok else ("❌ No pude borrar el Excel. Inténtalo de nuevo.", None)
 
         if scope == "dia":
             ok = storage.borrar_dia(fecha_str)
-            return (f"<b>Registro de {fecha_str} eliminado.</b>", None) if ok \
-                else (f"No encontré datos para {fecha_str}.", None)
+            return (
+                f"<b>✅ Registro de {fecha_str} eliminado.</b>\n"
+                "El resto del historial sigue intacto.",
+                None,
+            ) if ok else (
+                f"No encontré datos para {fecha_str}. "
+                "Puede que ya estuviera vacío.",
+                None,
+            )
 
-    return "Acción no reconocida.", None
+    return "Acción de callback no reconocida.", None
