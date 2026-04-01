@@ -59,7 +59,7 @@ def _rango_consulta(msg: str) -> int:
         return 7
     if "ayer" in m:
         return 2
-    return 1  # hoy por defecto
+    return 1
 
 def _teclado_reset(fecha_str: str, scope: str) -> InlineKeyboardMarkup:
     fecha_enc = fecha_str.replace("/", "-")
@@ -95,10 +95,21 @@ def _respuesta_comida(datos: dict, fecha_str: str, es_ayer: bool, es_nueva: bool
         f"<i>Excel actualizado.</i>"
     )
 
-# ── Handlers públicos ─────────────────────────────────────────────────────────
+# ── Punto de entrada único ────────────────────────────────────────────────────
 
-async def handle_comida(mensaje: str) -> tuple[str, None]:
-    """Analiza la comida con IA y guarda en el Excel."""
+async def run(mensaje: str) -> tuple[str, InlineKeyboardMarkup | None]:
+    """Main llama aquí. Detecta intención y ejecuta lo que toca."""
+    if es_reset(mensaje):
+        return await _handle_reset(mensaje)
+    if es_consulta(mensaje):
+        return await _handle_consulta(mensaje)
+    if es_comida(mensaje):
+        return await _handle_comida(mensaje)
+    return "No entendí qué querías hacer con el registro nutricional.", None
+
+# ── Handlers internos ─────────────────────────────────────────────────────────
+
+async def _handle_comida(mensaje: str) -> tuple[str, None]:
     fecha = _detectar_fecha(mensaje)
     es_ayer = (datetime.now() - fecha).days >= 1
     base = storage.cargar_base_nutricional()
@@ -116,8 +127,7 @@ async def handle_comida(mensaje: str) -> tuple[str, None]:
     return _respuesta_comida(datos, fecha.strftime("%d/%m/%Y"), es_ayer, es_nueva), None
 
 
-async def handle_reset(mensaje: str) -> tuple[str, InlineKeyboardMarkup]:
-    """Pide confirmación antes de borrar."""
+async def _handle_reset(mensaje: str) -> tuple[str, InlineKeyboardMarkup]:
     m = mensaje.lower()
     if any(p in m for p in ["todo", "registro", "excel", "cero", "completo"]):
         return (
@@ -125,7 +135,6 @@ async def handle_reset(mensaje: str) -> tuple[str, InlineKeyboardMarkup]:
             "Se eliminará el Excel completo. <i>No se puede deshacer.</i>",
             _teclado_reset(datetime.now().strftime("%d/%m/%Y"), "todo")
         )
-
     fecha = _detectar_fecha(mensaje)
     fecha_str = fecha.strftime("%d/%m/%Y")
     dia_label = "ayer" if (datetime.now() - fecha).days >= 1 else "hoy"
@@ -136,8 +145,7 @@ async def handle_reset(mensaje: str) -> tuple[str, InlineKeyboardMarkup]:
     )
 
 
-async def handle_consulta(mensaje: str) -> tuple[str, None]:
-    """Lee el Excel y pide a Claude que analice la consulta."""
+async def _handle_consulta(mensaje: str) -> tuple[str, None]:
     dias = _rango_consulta(mensaje)
     registros = storage.leer_registros(dias)
 
@@ -154,7 +162,7 @@ async def handle_callback(data: str) -> tuple[str, None]:
         return "Cancelado. El registro sigue intacto.", None
 
     if data.startswith("nutr_confirm_"):
-        partes = data.split("_", 3)          # ['nutr', 'confirm', scope, fecha]
+        partes = data.split("_", 3)
         scope = partes[2]
         fecha_str = partes[3].replace("-", "/") if len(partes) > 3 else ""
 
