@@ -68,6 +68,10 @@ _BORRAR_TODO = [
     "borra todo el historial", "elimina todo el historial",
     "limpiar todo", "borrar todo", "resetear todo",
     "reset total", "borrar registro completo",
+    # Tercera persona
+    "que borre todo", "que elimine todo", "que limpie todo",
+    "que resetee todo", "que borre el registro", "que elimine el registro",
+    "que borre el excel", "que limpie el excel",
 ]
 
 _BORRAR_DIA = [
@@ -80,9 +84,18 @@ _BORRAR_DIA = [
     "borra hoy", "borra ayer",
     "elimina hoy", "elimina ayer",
     "borrar hoy", "borrar ayer",
+    # Tercera persona
+    "que borre lo de hoy", "que borre lo de ayer",
+    "que borre hoy", "que borre ayer",
+    "que elimine lo de hoy", "que elimine lo de ayer",
+    "que elimine hoy", "que elimine ayer",
+    "que limpie hoy", "que limpie ayer",
+    "que resetee hoy", "que resetee ayer",
+    "que quite lo de hoy", "que quite lo de ayer",
 ]
 
 _CONSULTAR = [
+    # Primera persona
     "qué he comido", "que he comido",
     "qué llevo", "que llevo",
     "cuánto llevo", "cuanto llevo",
@@ -101,9 +114,23 @@ _CONSULTAR = [
     "dime lo que", "ver registro",
     "media semanal", "resumen semanal",
     "resumen del mes", "resumen mensual",
+    # Tercera persona y subjuntivo (lo que queda tras limpiar el ruido)
+    "me muestre", "me enseñe", "me ense\u00f1e", "me indique",
+    "me diga", "me explique", "me dé", "me de",
+    "muestre", "enseñe", "indique", "explique",
+    "qué ha comido", "que ha comido",
+    "qué lleva", "que lleva",
+    "cuánto lleva", "cuanto lleva",
+    "sus macros", "sus calorías", "sus calorias",
+    "cómo va", "como va",
+    "qué ha tomado", "que ha tomado",
+    "qué ha desayunado", "que ha desayunado",
+    "qué ha almorzado", "que ha almorzado",
+    "qué ha cenado", "que ha cenado",
 ]
-
+ 
 _REGISTRAR = [
+    # Primera persona
     "he comido", "he desayunado", "he cenado",
     "he almorzado", "he merendado", "he bebido",
     "comí", "desayuné", "almorcé", "cené", "merendé", "bebí",
@@ -113,24 +140,29 @@ _REGISTRAR = [
     "de desayuno", "de almuerzo", "de cena", "de merienda",
     "añade", "apunta", "registra", "anota",
     "ayer comí", "ayer desayuné", "ayer almorcé", "ayer cené",
+    # Tercera persona y subjuntivo
+    "que apunte", "que registre", "que anote", "que añada",
+    "apunte", "registre", "anote", "añada",
+    "ha comido", "ha desayunado", "ha cenado",
+    "ha almorzado", "ha merendado", "ha bebido",
 ]
 
 
 def _detectar_intencion(mensaje: str) -> str:
     """
     Detecta la intención del mensaje usando palabras clave.
-    Orden de prioridad: borrar_todo > borrar_dia > consultar > registrar
+    Orden de prioridad: registrar > consultar > borrar_dia > borrar_todo
     Devuelve "desconocido" si no hay coincidencia.
     """
     m = mensaje.lower()
-    if any(p in m for p in _BORRAR_TODO):
-        return "borrar_todo"
-    if any(p in m for p in _BORRAR_DIA):
-        return "borrar_dia"
-    if any(p in m for p in _CONSULTAR):
-        return "consultar"
     if any(p in m for p in _REGISTRAR):
         return "registrar"
+    if any(p in m for p in _CONSULTAR):
+        return "consultar"
+    if any(p in m for p in _BORRAR_DIA):
+        return "borrar_dia"
+    if any(p in m for p in _BORRAR_TODO):
+        return "borrar_todo"
     return "desconocido"
 
 
@@ -165,6 +197,8 @@ def _formatear_registro(datos: dict, fecha_str: str, es_ayer: bool, es_nueva: bo
     t      = datos["totales"]
     dia    = "Día anterior" if es_ayer else "Hoy"
     estado = "nueva entrada" if es_nueva else "sumado a lo anterior"
+    registros_hoy = storage.leer_registros(dias=1)
+    total_hoy = registros_hoy[-1] if registros_hoy else datos["totales"]
 
     desglose = ""
     for a in datos.get("alimentos", []):
@@ -180,7 +214,7 @@ def _formatear_registro(datos: dict, fecha_str: str, es_ayer: bool, es_nueva: bo
         f"{dia} — <b>{fecha_str}</b> <i>({estado})</i>\n\n"
         f"<b>{datos['descripcion_comida']}</b>\n\n"
         f"<b>Desglose por alimento:</b>\n{desglose}\n"
-        f"<b>Total acumulado del día:</b>\n"
+        f"<b>Suma total de la ingesta:</b>\n"
         f"  Calorías:       <b>{t['calorias']:.0f} kcal</b>\n"
         f"  Proteínas:      <b>{t['proteinas']:.1f} g</b>\n"
         f"  Carbohidratos:  <b>{t['carbohidratos']:.1f} g</b>\n"
@@ -188,6 +222,7 @@ def _formatear_registro(datos: dict, fecha_str: str, es_ayer: bool, es_nueva: bo
         f"  Azúcar:         <b>{t['azucar']:.1f} g</b>\n"
         f"  Fibra:          <b>{t['fibra']:.1f} g</b>\n\n"
         f"<i>✅ Guardado en el Excel.</i>"
+        f"<b>Calorías totales del día: :</b>{total_hoy['calorias']:.0f} kcal</b>\n"\n
     )
 
 
