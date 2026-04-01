@@ -2,36 +2,98 @@
 ia.py — Capa de inteligencia artificial del agente de nutrición.
 
 Responsabilidad única: comunicarse con Claude.
-No sabe nada del Excel ni de Telegram.
+NO detecta intenciones. NO toca el Excel. NO sabe nada de Telegram.
 
-Claude recibe el mensaje + contexto y devuelve un JSON estructurado
-con la intención detectada y los datos necesarios para ejecutarla.
+Dos funciones públicas:
+  - calcular_macros()    → analiza alimentos y devuelve valores nutricionales
+  - analizar_historial() → analiza el registro y genera un resumen para el usuario
+
+Protecciones incluidas:
+  - Reintentos automáticos ante fallos de red (Bug 2)
+  - Validación completa de todos los campos de totales (Bug 3)
+  - Limpieza de bloques markdown en respuestas de Claude
 """
 
 import json
 import logging
 import re
+import time
 from datetime import datetime
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIError, APITimeoutError
 
 logger = logging.getLogger(__name__)
 claude = Anthropic()
 
-# ── System prompt ─────────────────────────────────────────────────────────────
+# Campos obligatorios en el objeto "totales"
+_CAMPOS_TOTALES = ("calorias", "proteinas", "carbohidratos", "grasas", "azucar", "fibra")
 
-_SYSTEM = """Eres un experto en nutrición integrado en un asistente personal.
+# Configuración de reintentos
+_MAX_REINTENTOS = 3
+_ESPERA_BASE_SEG = 1  # espera exponencial: 1s, 2s, 4s
 
-Recibes un mensaje del usuario junto con su historial nutricional y una base de datos de alimentos.
-Tu trabajo es interpretar la intención y devolver ÚNICAMENTE un JSON válido, sin texto adicional ni bloques markdown.
 
-═══════════════════════════════════════
-INTENCIONES POSIBLES Y SU JSON
-═══════════════════════════════════════
+# ── Helpers internos ──────────────────────────────────────────────────────────
 
-1. REGISTRAR una comida:
+def _limpiar_json(texto: str) -> str:
+    """Elimina bloques markdown que Claude pueda añadir por error."""
+    return re.sub(r"^```(?:json)?\s*|\s*```$", "", texto.strip(), flags=re.MULTILINE).strip()
+
+
+def _llamar_claude_con_reintentos(*, model: str, max_tokens: int,
+                                   system: str, messages: list) -> str:
+    """
+    Llama a la API de Claude con reintentos exponenciales ante fallos de red.
+    Devuelve el texto de la respuesta o lanza ValueError tras agotar los intentos.
+    (Bug 2)
+    """
+    ultimo_error = None
+    for intento in range(_MAX_REINTENTOS):
+        try:
+            response = claude.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=messages,
+            )
+            return response.content[0].text.strip()
+        except (APITimeoutError, APIError) as e:
+            ultimo_error = e
+            if intento < _MAX_REINTENTOS - 1:
+                espera = _ESPERA_BASE_SEG * (2 ** intento)
+                logger.warning(
+                    "Fallo llamada Claude (intento %d/%d), reintentando en %ds: %s",
+                    intento + 1, _MAX_REINTENTOS, espera, e,
+                )
+                time.sleep(espera)
+            else:
+                logger.error("Agotados los reintentos de Claude: %s", e)
+
+    raise ValueError(f"Claude no respondió tras {_MAX_REINTENTOS} intentos: {ultimo_error}")
+
+
+def _validar_totales(totales: dict) -> None:
+    """
+    Valida que el objeto totales tenga todos los campos obligatorios
+    y que sus valores sean numéricos. (Bug 3)
+    """
+    for campo in _CAMPOS_TOTALES:
+        if campo not in totales:
+            raise ValueError(f"Campo obligatorio ausente en totales: {campo!r}")
+        try:
+            float(totales[campo])
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"El campo {campo!r} en totales no es numérico: {totales[campo]!r}"
+            )
+
+
+# ── calcular_macros ───────────────────────────────────────────────────────────
+
+_SYSTEM_MACROS = """Eres un experto en nutrición. Analiza los alimentos descritos y devuelve ÚNICAMENTE un JSON válido, sin texto adicional ni bloques markdown.
+
+Formato obligatorio:
 {
-  "intencion": "registrar",
   "descripcion_comida": "Descripción breve de lo comido",
   "alimentos": [
     {
@@ -55,107 +117,111 @@ INTENCIONES POSIBLES Y SU JSON
   }
 }
 
-2. CONSULTAR el historial:
-{
-  "intencion": "consultar",
-  "respuesta": "Texto HTML con el análisis. Usa <b>negrita</b> e <i>cursiva</i>. Sin asteriscos."
-}
-
-3. BORRAR el registro de un día:
-{
-  "intencion": "borrar_dia"
-}
-
-4. BORRAR todo el registro:
-{
-  "intencion": "borrar_todo"
-}
-
-═══════════════════════════════════════
-REGLAS PARA REGISTRAR
-═══════════════════════════════════════
-- Todos los valores nutricionales son para la cantidad descrita (NO por 100g)
-- Si no se especifica cantidad, usa una porción estándar razonable
-- Si el alimento aparece en la BASE NUTRICIONAL, úsala; si no, usa tu conocimiento, investiga en internet y coge datos de fuentes FIABLES.
+Reglas:
+- Valores para la cantidad descrita (NO por 100g)
+- Sin cantidad especificada → porción estándar razonable
+- Usa la base nutricional si el alimento aparece; si no, usa tu conocimiento
 - Los totales deben ser la suma exacta de todos los alimentos
 - Si digo que he comido una galleta son 10g
-- Redondea a 1 decimal. Calorías en kcal, el resto en gramos
-
-═══════════════════════════════════════
-REGLAS PARA CONSULTAR
-═══════════════════════════════════════
-- Analiza el historial proporcionado y responde de forma concisa y accionable
-- Incluye medias, el día con más/menos calorías y tendencias si hay varios días
-- Si no hay historial, indícalo claramente
-- Formato HTML: <b>negrita</b>, <i>cursiva</i>, guiones para listas. Sin asteriscos."""
+- Todos los valores numéricos deben ser números (float), nunca strings
+- Redondea a 1 decimal. Calorías en kcal, resto en gramos
+- Si hay varios alimentos, inclúyelos todos en la lista"""
 
 
-# ── Función pública ───────────────────────────────────────────────────────────
-
-def interpretar(
-    mensaje: str,
-    base_nutricional: dict,
-    historial: list[dict],
-) -> tuple[str, dict]:
+def calcular_macros(mensaje: str, base_nutricional: dict) -> dict:
     """
-    Envía el mensaje a Claude con el contexto completo.
+    Llama a Claude para analizar los alimentos del mensaje y calcular macros.
 
     Args:
-        mensaje:          Texto original del usuario.
-        base_nutricional: Dict con valores nutricionales por alimento (por 100g).
-        historial:        Lista de registros de los últimos N días.
+        mensaje:          Texto del usuario (ya limpio de ruido conversacional).
+        base_nutricional: Valores nutricionales por alimento (por 100g).
 
     Returns:
-        (intencion, datos) donde intencion es una de:
-        "registrar" | "consultar" | "borrar_dia" | "borrar_todo"
-        y datos contiene el resto del JSON devuelto por Claude.
+        Dict con "descripcion_comida", "alimentos" y "totales" validados.
 
     Raises:
-        ValueError: Si Claude devuelve un JSON no parseable.
+        ValueError: Si Claude devuelve JSON inválido, incompleto o con campos no numéricos.
     """
-    # Construir contexto adicional
-    contexto_partes = []
-
+    contexto = ""
     if base_nutricional:
-        contexto_partes.append(
-            f"BASE NUTRICIONAL (valores por 100g):\n"
+        contexto = (
+            f"\n\nBASE NUTRICIONAL DISPONIBLE (valores por 100g):\n"
             f"{json.dumps(base_nutricional, ensure_ascii=False, indent=2)}"
         )
 
-    if historial:
-        hoy = datetime.now().strftime("%d/%m/%Y")
-        contexto_partes.append(
-            f"Fecha de hoy: {hoy}\n"
-            f"HISTORIAL NUTRICIONAL (últimos días):\n"
-            f"{json.dumps(historial, ensure_ascii=False, indent=2)}"
-        )
-
-    contexto = "\n\n".join(contexto_partes)
-    prompt   = f"Mensaje del usuario: {mensaje}"
-    if contexto:
-        prompt += f"\n\n{contexto}"
-
-    # Llamada a Claude
-    response = claude.messages.create(
+    raw = _llamar_claude_con_reintentos(
         model="claude-haiku-4-5",
         max_tokens=1024,
-        system=_SYSTEM,
+        system=_SYSTEM_MACROS,
+        messages=[{
+            "role": "user",
+            "content": f"Analiza esta comida y calcula los macros:{contexto}\n\nMensaje: {mensaje}",
+        }],
+    )
+
+    try:
+        datos = json.loads(_limpiar_json(raw))
+    except json.JSONDecodeError as e:
+        logger.error("JSON inválido en calcular_macros: %s\nRaw: %s", e, raw)
+        raise ValueError(f"Respuesta no parseable de Claude: {e}") from e
+
+    # Validar campos obligatorios de primer nivel
+    for campo in ("descripcion_comida", "alimentos", "totales"):
+        if campo not in datos:
+            raise ValueError(f"Campo obligatorio ausente en respuesta de Claude: {campo!r}")
+
+    # Validar todos los campos de totales y que sean numéricos (Bug 3)
+    _validar_totales(datos["totales"])
+
+    return datos
+
+
+# ── analizar_historial ────────────────────────────────────────────────────────
+
+_SYSTEM_HISTORIAL = """Eres Lisa, una AI Manager especializada en nutrición.
+Recibes el historial nutricional del usuario y debes analizarlo de forma clara, concisa y útil.
+
+Formato de respuesta:
+- Usa <b>negrita</b> e <i>cursiva</i> HTML. Nunca asteriscos ni guiones bajos.
+- Guiones simples para listas.
+- Respuestas concisas y accionables.
+
+Si hay datos de un solo día: haz el resumen de ese día.
+Si hay varios días: incluye medias, el día con más y menos calorías, y tendencias.
+Termina siempre con una observación práctica y útil."""
+
+
+def analizar_historial(mensaje: str, registros: list[dict]) -> str:
+    """
+    Llama a Claude para analizar el historial nutricional y responder la consulta.
+
+    Args:
+        mensaje:   Consulta del usuario (ya limpia de ruido conversacional).
+        registros: Lista de registros del Excel (output de storage.leer_registros).
+
+    Returns:
+        Texto HTML con el análisis, listo para enviar por Telegram.
+
+    Raises:
+        ValueError: Si Claude devuelve una respuesta vacía o falla la llamada.
+    """
+    hoy    = datetime.now().strftime("%d/%m/%Y")
+    prompt = (
+        f"Fecha de hoy: {hoy}\n"
+        f"Consulta del usuario: \"{mensaje}\"\n\n"
+        f"Historial nutricional:\n"
+        f"{json.dumps(registros, ensure_ascii=False, indent=2)}\n\n"
+        f"Analiza los datos y responde la consulta."
+    )
+
+    respuesta = _llamar_claude_con_reintentos(
+        model="claude-haiku-4-5",
+        max_tokens=800,
+        system=_SYSTEM_HISTORIAL,
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw = response.content[0].text.strip()
+    if not respuesta:
+        raise ValueError("Claude devolvió una respuesta vacía")
 
-    # Limpiar posibles bloques markdown que Claude añada por error
-    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-
-    try:
-        datos = json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.error("Claude devolvió JSON inválido: %s\nRaw: %s", e, raw)
-        raise ValueError(f"Respuesta no parseable de Claude: {e}") from e
-
-    intencion = datos.pop("intencion", None)
-    if intencion not in ("registrar", "consultar", "borrar_dia", "borrar_todo"):
-        raise ValueError(f"Intención desconocida: {intencion!r}")
-
-    return intencion, datos
+    return respuesta

@@ -3,15 +3,16 @@ main.py — Bot de Telegram: Lisa, AI Manager personal.
 
 Arquitectura:
   - Lisa responde conversación general directamente con Claude
-  - Cuando el usuario menciona explícitamente nutrición, Lisa deriva
-    al agente de nutrición (agents/nutrition/agent.py)
-  - Los callbacks de botones inline se enrutan según su prefijo
+  - Cuando el usuario menciona nutrición, Lisa devuelve el token AGENTE:NUTRICION
+    y main.py deriva al agente correspondiente
+  - Los callbacks de botones inline se enrutan por prefijo
 
-Para añadir un nuevo agente:
+Para añadir un nuevo agente en el futuro:
   1. Crea agents/<nombre>/agent.py con run() y handle_callback()
-  2. Añade "AGENTE:<NOMBRE>" al SYSTEM_LISA
-  3. Añade el elif correspondiente en manejar_mensaje()
-  4. Añade el routing de callbacks en manejar_callback()
+  2. Importa el agente aquí
+  3. Añade "AGENTE:<NOMBRE>" al SYSTEM_LISA
+  4. Añade el elif en manejar_mensaje()
+  5. Añade el routing por prefijo en manejar_callback()
 """
 
 import logging
@@ -45,10 +46,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-claude = Anthropic()
-
-# Historial de conversación por usuario (en memoria, se pierde al reiniciar)
-# Para persistencia real, usar Redis o base de datos
+claude         = Anthropic()
 _conversaciones: dict[int, list[dict]] = {}
 
 # ── System prompt de Lisa ─────────────────────────────────────────────────────
@@ -58,16 +56,17 @@ SYSTEM_LISA = """Eres Lisa, una AI Manager personal. Hablas en español, eres di
 AGENTES DISPONIBLES:
 - Agente de nutrición: registra comidas, consulta macros y gestiona el historial nutricional.
 
-REGLA DE DERIVACIÓN:
-Si el usuario menciona explícitamente "nutrición", "agente de nutrición", "bot de nutrición",
-o pide registrar/consultar/borrar comidas o macros, responde ÚNICAMENTE con el token:
-  AGENTE:NUTRICION
+REGLA DE DERIVACIÓN — MUY IMPORTANTE:
+Si el usuario menciona "nutrición", "agente de nutrición", "bot de nutrición", "gente de nutrición",
+o pide registrar/consultar/borrar comidas o macros, tu respuesta debe ser ÚNICAMENTE este token:
+AGENTE:NUTRICION
+
+No añadas texto antes ni después. Solo el token exacto, nada más.
 
 En cualquier otro caso, responde tú directamente de forma concisa y útil.
 
-FORMATO DE RESPUESTA (cuando respondes tú):
-- Usa <b>negrita</b> e <i>cursiva</i> HTML. Nunca asteriscos ni guiones bajos.
-- Respuestas concisas y accionables."""
+FORMATO (cuando respondes tú directamente):
+- Usa <b>negrita</b> e <i>cursiva</i> HTML. Nunca asteriscos ni guiones bajos."""
 
 
 # ── Comandos ──────────────────────────────────────────────────────────────────
@@ -78,8 +77,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"Hola {user.first_name} 👋\n\n"
         "Soy <b>Lisa</b>, tu AI Manager personal.\n\n"
-        "Puedo ayudarte con lo que necesites. Si quieres gestionar tu "
-        "nutrición, dime algo como:\n"
+        "Para gestionar tu nutrición dime algo como:\n"
         "<i>«Dile al agente de nutrición que he comido una tortilla»</i>\n\n"
         "¿En qué trabajamos hoy?",
         parse_mode="HTML",
@@ -101,23 +99,27 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
-        # Añadir mensaje al historial y preguntarle a Lisa qué hacer
         _conversaciones[user.id].append({"role": "user", "content": mensaje})
 
         decision = claude.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=512,
+            max_tokens=50,          # El token tiene 16 chars; 50 es más que suficiente
             system=SYSTEM_LISA,
             messages=_conversaciones[user.id],
         ).content[0].text.strip()
 
         # ── Derivar al agente de nutrición ────────────────────────────────────
-        if decision == "AGENTE:NUTRICION":
-            # Sacamos el mensaje del historial de Lisa: el agente gestiona su propio contexto
-            _conversaciones[user.id].pop()
+        # Usamos "in" en vez de "==" para ser robustos ante texto extra de Claude
+        if "AGENTE:NUTRICION" in decision.upper():
+            _conversaciones[user.id].pop()  
 
-            await update.message.reply_text("🥗 <i>Consultando el agente de nutrición...</i>", parse_mode="HTML")
-            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            await update.message.reply_text(
+                "🥗 <i>Consultando el agente de nutrición...</i>",
+                parse_mode="HTML",
+            )
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id, action="typing"
+            )
 
             texto, teclado = await nutrition_agent.run(mensaje)
             await update.message.reply_text(texto, parse_mode="HTML", reply_markup=teclado)
@@ -126,7 +128,7 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             _conversaciones[user.id].append({"role": "assistant", "content": decision})
 
-            # Limitar historial para no crecer indefinidamente (10 turnos = 20 mensajes)
+            # Mantener solo los últimos 10 turnos (20 mensajes) para no crecer indefinidamente
             if len(_conversaciones[user.id]) > 20:
                 _conversaciones[user.id] = _conversaciones[user.id][-20:]
 
@@ -145,16 +147,14 @@ async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    data = query.data
+    data  = query.data
 
     try:
-        # Routing por prefijo del callback_data
         if data.startswith("nutr_"):
             texto, teclado = await nutrition_agent.handle_callback(data)
             await query.edit_message_text(texto, parse_mode="HTML", reply_markup=teclado)
             return
 
-        # Callback no reconocido (no debería ocurrir en producción)
         logger.warning("Callback no reconocido: %s", data)
         await query.edit_message_text("Acción no reconocida.", parse_mode="HTML")
 
@@ -171,8 +171,8 @@ async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def main() -> None:
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("start",  cmd_start))
+    app.add_handler(CommandHandler("reset",  cmd_reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manejar_mensaje))
     app.add_handler(CallbackQueryHandler(manejar_callback))
 
