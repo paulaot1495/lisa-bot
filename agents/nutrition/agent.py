@@ -222,7 +222,7 @@ def _formatear_registro(datos: dict, fecha_str: str, es_ayer: bool, es_nueva: bo
         f"  Azúcar:         <b>{t['azucar']:.1f} g</b>\n"
         f"  Fibra:          <b>{t['fibra']:.1f} g</b>\n\n"
         f"<i>✅ Guardado en el Excel.</i>"
-        f"<b>Calorías totales del día: :</b>{total_hoy['calorias']:.0f} kcal</b>\n"\n
+        f"<b>Calorías totales del día: {total_hoy['calorias']:.0f} kcal</b>\n"
     )
 
 
